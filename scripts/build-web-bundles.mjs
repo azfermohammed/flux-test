@@ -1,0 +1,290 @@
+#!/usr/bin/env node
+/*
+ * Build 4 web bundles from scripts/web-bundle-manifest.json:
+ *   - flux-vendor.js   ESM module bundle of the 7 type=module scripts. The npm
+ *                      deps @supabase/supabase-js and animejs are bundled in
+ *                      (both pinned exact in package.json — nothing loads from a
+ *                      CDN at runtime); flux-kit-bootstrap's
+ *                      ./core|features|ui|utils tree is bundled in too.
+ *   - flux-core.js     classic concat of the 27 defer scripts up to & incl.
+ *                      app.js, minified.
+ *   - flux-features.js classic concat of the remaining 164 defer scripts,
+ *                      minified.
+ *   - flux.css         literal concat of the 139 per-page <link> stylesheets
+ *                      in exact cascade order, css-minified. esbuild never
+ *                      reorders rules across selectors, so overrides are
+ *                      preserved. (Google Fonts stays a separate <link>.)
+ *
+ * The classic bundles are LITERAL concatenation (join with "\n;\n" to kill
+ * trailing line-comments + guard against ASI) then esbuild transform-minify.
+ * No module wrapping, no bundling, no tree-shaking — global scope and load
+ * order are preserved exactly, which the 191 global-coupled scripts require.
+ * console.log/info/debug are dropped; console.warn/error kept for prod.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import esbuild from 'esbuild';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const OUT = path.join(ROOT, 'public', 'bundles');
+const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'scripts', 'web-bundle-manifest.json'), 'utf8'));
+
+const PURE = ['console.log', 'console.info', 'console.debug'];
+
+fs.mkdirSync(OUT, { recursive: true });
+
+/* B5.4: bundles ship under content-hashed names (flux-core.<sha1-8>.js).
+ * index.html references and the service worker's BUILD constant are rewritten
+ * here on every build — the manual "bump STATIC in service-worker.js" ritual
+ * is dead. Hashed names are immutable, so the SW can cache-first them. */
+const hash8 = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0, 8);
+function hashedName(base, code) {
+  const i = base.lastIndexOf('.');
+  return `${base.slice(0, i)}.${hash8(code)}${base.slice(i)}`;
+}
+
+async function buildClassic(name, files) {
+  const parts = files.map((rel) => {
+    const abs = path.join(ROOT, rel);
+    return `/* ==== ${rel} ==== */\n${fs.readFileSync(abs, 'utf8')}`;
+  });
+  const concatenated = parts.join('\n;\n');
+  const res = await esbuild.transform(concatenated, {
+    minify: true,
+    pure: PURE,
+    legalComments: 'none',
+    // No `format` — keep top-level global scope untouched.
+  });
+  const out = hashedName(name, res.code);
+  fs.writeFileSync(path.join(OUT, out), res.code);
+  return { name, out, files: files.length, bytes: res.code.length };
+}
+
+async function buildVendor(name, files) {
+  // Synthetic entry that imports each module in original order.
+  const entry = files.map((f) => `import ${JSON.stringify(path.join(ROOT, f))};`).join('\n');
+  const entryPath = path.join(OUT, '.vendor-entry.mjs');
+  fs.writeFileSync(entryPath, entry);
+  const res = await esbuild.build({
+    entryPoints: [entryPath],
+    bundle: true,
+    format: 'esm',
+    minify: true,
+    pure: PURE,
+    legalComments: 'none',
+    write: false,
+  });
+  fs.unlinkSync(entryPath);
+  const code = res.outputFiles[0].text;
+  const out = hashedName(name, code);
+  fs.writeFileSync(path.join(OUT, out), code);
+  return { name, out, files: files.length, bytes: code.length };
+}
+
+async function buildCss(name, files) {
+  // Literal concatenation in manifest order (== the original <link> sequence in
+  // index.html), then esbuild css-minify. esbuild never reorders rules across
+  // selectors, so the cascade / override order is preserved exactly. Safe here
+  // because none of the sources use @import, @charset, @layer, or relative
+  // url() file refs (verified) — so concatenation can't corrupt the CSS.
+  const parts = files.map((rel) => {
+    const abs = path.join(ROOT, rel);
+    return `/* ==== ${rel} ==== */\n${fs.readFileSync(abs, 'utf8')}`;
+  });
+  const res = await esbuild.transform(parts.join('\n'), {
+    loader: 'css',
+    minify: true,
+    legalComments: 'none',
+  });
+  const out = hashedName(name, res.code);
+  fs.writeFileSync(path.join(OUT, out), res.code);
+  return { name, out, files: files.length, bytes: res.code.length };
+}
+
+/* Synara (synara.html) is its own app, written as ES modules in
+ * public/synara/js — copied from the Synara repo by its `npm run flux`.
+ * Loose modules would hit the same trap as grapher.html's scripts (step 2b):
+ * the service worker serves them stale-while-revalidate, and a new main.js
+ * importing an old store.js fails with "does not provide an export named …".
+ * So it ships as one hashed script and one hashed stylesheet, cache-first
+ * like the planner's bundles. Not precached: planner users never load it. */
+const SYNARA = path.join(ROOT, 'public', 'synara');
+async function buildSynara() {
+  const js = await esbuild.build({
+    entryPoints: [path.join(SYNARA, 'js', 'main.js')],
+    bundle: true,
+    format: 'iife',
+    minify: true,
+    pure: PURE,
+    legalComments: 'none',
+    metafile: true,
+    write: false,
+  });
+  const code = js.outputFiles[0].text;
+  const jsOut = hashedName('flux-synara.js', code);
+  fs.writeFileSync(path.join(OUT, jsOut), code);
+
+  // Same cascade order as Synara's own index.html; print.css loads there
+  // with media="print", so here it is wrapped in @media print.
+  const css = ['tokens', 'base', 'components', 'app']
+    .map((n) => fs.readFileSync(path.join(SYNARA, 'css', n + '.css'), 'utf8'))
+    .concat(`@media print {\n${fs.readFileSync(path.join(SYNARA, 'css', 'print.css'), 'utf8')}\n}`)
+    .join('\n');
+  const min = await esbuild.transform(css, { loader: 'css', minify: true, legalComments: 'none' });
+  const cssOut = hashedName('flux-synara.css', min.code);
+  fs.writeFileSync(path.join(OUT, cssOut), min.code);
+
+  // Synara's sync talks to Flux through this (public/js/flux-synara-vault.mjs):
+  // the planner's Supabase sign-in, bundled from node_modules — nothing from a
+  // CDN. The underscore keeps the name inside the prune and service-worker
+  // patterns, flux(-\w+)?.<hash>.js.
+  const vault = await esbuild.build({
+    entryPoints: [path.join(ROOT, 'public', 'js', 'flux-synara-vault.mjs')],
+    bundle: true,
+    format: 'iife',
+    minify: true,
+    pure: PURE,
+    legalComments: 'none',
+    metafile: true,
+    write: false,
+  });
+  const vaultCode = vault.outputFiles[0].text;
+  const vaultOut = hashedName('flux-synara_vault.js', vaultCode);
+  fs.writeFileSync(path.join(OUT, vaultOut), vaultCode);
+
+  return [
+    { name: 'flux-synara.js', out: jsOut, files: Object.keys(js.metafile.inputs).length, bytes: code.length },
+    { name: 'flux-synara.css', out: cssOut, files: 5, bytes: min.code.length },
+    { name: 'flux-synara_vault.js', out: vaultOut, files: Object.keys(vault.metafile.inputs).length, bytes: vaultCode.length },
+  ];
+}
+
+/* The Aorta tracker (aorta-tracker.html) saves to a Flux account through
+ * public/js/flux-aorta-vault.mjs, built the same way as Synara's vault. */
+async function buildAortaVault() {
+  const res = await esbuild.build({
+    entryPoints: [path.join(ROOT, 'public', 'js', 'flux-aorta-vault.mjs')],
+    bundle: true,
+    format: 'iife',
+    minify: true,
+    pure: PURE,
+    legalComments: 'none',
+    metafile: true,
+    write: false,
+  });
+  const code = res.outputFiles[0].text;
+  const out = hashedName('flux-aorta_vault.js', code);
+  fs.writeFileSync(path.join(OUT, out), code);
+  return [{ name: 'flux-aorta_vault.js', out, files: Object.keys(res.metafile.inputs).length, bytes: code.length }];
+}
+
+const results = [];
+results.push(await buildVendor('flux-vendor.js', manifest.vendor));
+results.push(await buildClassic('flux-core.js', manifest.core));
+results.push(await buildClassic('flux-features.js', manifest.features));
+results.push(await buildCss('flux.css', manifest.css));
+const synara = fs.existsSync(path.join(SYNARA, 'js', 'main.js')) ? await buildSynara() : [];
+const aorta = await buildAortaVault();
+// Owner Controls (owner.html) is its own app. Not precached: nobody else loads it.
+const owner = [
+  await buildVendor('flux-owner_vendor.js', manifest.ownerVendor),
+  await buildClassic('flux-owner.js', manifest.owner),
+  await buildCss('flux-owner.css', manifest.ownerCss),
+];
+
+/* ── Post-build wiring (B5.4) ── */
+
+// 1. Prune stale bundle outputs (older hashes) so git status stays exact.
+const keep = new Set([...results.map((r) => r.out), ...synara.map((r) => r.out), ...owner.map((r) => r.out), ...aorta.map((r) => r.out), 'precache-manifest.json']);
+for (const f of fs.readdirSync(OUT)) {
+  if (!keep.has(f) && /^flux(-\w+)?\.[0-9a-f]{8}\.(js|css)$/.test(f)) fs.unlinkSync(path.join(OUT, f));
+  if (!keep.has(f) && /^flux(-\w+)?\.(js|css)$/.test(f)) fs.unlinkSync(path.join(OUT, f)); // pre-hash era outputs
+}
+
+// 2. Rewrite index.html bundle references to the hashed names.
+const INDEX = path.join(ROOT, 'index.html');
+let indexHtml = fs.readFileSync(INDEX, 'utf8');
+for (const r of results) {
+  // Bundle base names are plain [a-z-] (flux, flux-core, …) — no escaping needed.
+  const base = r.name.replace(/\.(js|css)$/, '');
+  const ext = r.name.endsWith('.css') ? 'css' : 'js';
+  const re = new RegExp(`public/bundles/${base}(\\.[0-9a-f]{8})?\\.${ext}`, 'g');
+  indexHtml = indexHtml.replace(re, `public/bundles/${r.out}`);
+}
+fs.writeFileSync(INDEX, indexHtml);
+
+// 2a. synara.html loads its two bundles the same way.
+const SYNARA_HTML = path.join(ROOT, 'synara.html');
+if (synara.length && fs.existsSync(SYNARA_HTML)) {
+  let page = fs.readFileSync(SYNARA_HTML, 'utf8');
+  for (const r of synara) {
+    const [base, ext] = r.name.split('.');
+    page = page.replace(new RegExp(`public/bundles/${base}(\\.[0-9a-f]{8})?\\.${ext}`, 'g'), `public/bundles/${r.out}`);
+  }
+  fs.writeFileSync(SYNARA_HTML, page);
+}
+
+// 2a-aorta. aorta-tracker.html and aorta.html load the vault the same way.
+for (const AORTA_PAGE of ['aorta-tracker.html', 'aorta.html']) {
+  const AORTA_HTML = path.join(ROOT, AORTA_PAGE);
+  if (fs.existsSync(AORTA_HTML)) {
+    let page = fs.readFileSync(AORTA_HTML, 'utf8');
+    for (const r of aorta) {
+      const [base, ext] = r.name.split('.');
+      page = page.replace(new RegExp(`public/bundles/${base}(\\.[0-9a-f]{8})?\\.${ext}`, 'g'), `public/bundles/${r.out}`);
+    }
+    fs.writeFileSync(AORTA_HTML, page);
+  }
+}
+
+// 2a-owner. owner.html too.
+{
+  const OWNER_HTML = path.join(ROOT, 'owner.html');
+  let page = fs.readFileSync(OWNER_HTML, 'utf8');
+  for (const r of owner) {
+    const [base, ext] = r.name.split('.');
+    page = page.replace(new RegExp(`public/bundles/${base}(\\.[0-9a-f]{8})?\\.${ext}`, 'g'), `public/bundles/${r.out}`);
+  }
+  fs.writeFileSync(OWNER_HTML, page);
+}
+
+// 2b. grapher.html loads plain source files — it has to work on its own —
+//     and the service worker serves unhashed files stale-while-revalidate.
+//     So after a deploy a returning visitor got the NEW grapher.html with
+//     the OLD scripts, and the page broke ("G.create is not a function").
+//     A content hash in each query string makes every version its own URL.
+//     calculator.html, periodic.html and composer.html are built the same way, for the same reason.
+for (const page of ['owner.html', 'grapher.html', 'calculator.html', 'periodic.html', 'composer.html', 'flashcards.html', 'translate.html', 'pixel.html', 'synara.html', 'partners.html', 'landing.html', 'suite.html', 'teacher.html', 'synara-welcome.html', 'aorta.html', 'aorta-tracker.html', 'index.html']) {
+  const file = path.join(ROOT, page);
+  if (!fs.existsSync(file)) continue;
+  const before = fs.readFileSync(file, 'utf8');
+  const after = before.replace(/(src|href)="(public\/(?:js|css)\/[\w.-]+\.(?:js|css))(\?v=[0-9a-f]+)?"/g, (m, attr, src) => {
+    const abs = path.join(ROOT, src);
+    if (!fs.existsSync(abs)) return m;
+    return `${attr}="${src}?v=${hash8(fs.readFileSync(abs, 'utf8'))}"`;
+  });
+  if (after !== before) fs.writeFileSync(file, after);
+}
+
+// 3. Precache manifest + BUILD stamp in the service worker (auto-versioned —
+//    never bump STATIC by hand again).
+const build = hash8(results.map((r) => r.out).join('|'));
+fs.writeFileSync(
+  path.join(OUT, 'precache-manifest.json'),
+  JSON.stringify({ build, assets: results.map((r) => 'public/bundles/' + r.out) }, null, 2) + '\n',
+);
+const SW = path.join(ROOT, 'service-worker.js');
+let sw = fs.readFileSync(SW, 'utf8');
+const stamped = sw.replace(/const BUILD = '[^']*';/, `const BUILD = '${build}';`);
+if (stamped === sw && !sw.includes(`const BUILD = '${build}';`)) {
+  console.warn('  ! service-worker.js has no BUILD constant to stamp — SW versioning skipped');
+} else {
+  fs.writeFileSync(SW, stamped);
+}
+
+for (const r of [...results, ...synara, ...owner]) {
+  console.log(`  ${r.out.padEnd(30)} ${String(r.files).padStart(3)} files  ${(r.bytes / 1024).toFixed(0)} KB`);
+}
+console.log(`Bundles written to public/bundles/ (build ${build})`);

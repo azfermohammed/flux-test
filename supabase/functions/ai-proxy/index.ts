@@ -1,0 +1,1199 @@
+import { verifyUserJWT, json, corsHeaders } from "../_shared/auth.ts";
+import {
+  normalizeFeedUrl as publicHttpsUrl,
+  resolvesToPublicHost,
+} from "../_shared/schoology-feed.ts";
+import {
+  type Entitlement,
+  getEntitlement,
+  checkAndIncrementAIUsage,
+  refundAIUsage,
+} from "../_shared/plan.ts";
+import {
+  bumpDailyGuard,
+  clientIp,
+  isAnonRoleJwt,
+  refundDailyGuard,
+  sha256Hex,
+} from "../_shared/rate-limit.ts";
+import {
+  fitMessages,
+  isGeminiModelGone,
+  isTooLargeError,
+  newestGeminiFlash,
+} from "../_shared/ai-models.ts";
+
+const PAYMENTS_ENABLED = Deno.env.get("PAYMENTS_ENABLED") === "true";
+/* Photo → data table for the grapher ("table_scan"). Free on every plan with
+   an account, a daily allowance each; Pro/School get more once payments are on. */
+const SCAN_DAILY = Number(Deno.env.get("AI_PROXY_SCAN_DAILY") ?? "10");
+const SCAN_PRO_DAILY = Number(Deno.env.get("AI_PROXY_SCAN_PRO_DAILY") ?? "60");
+/** ~6 MB of base64. The grapher sends a JPEG no longer than 2000 px (well under 1 MB). */
+const SCAN_MAX_IMAGE_CHARS = 8_000_000;
+/* The server's own instructions for a scan. A free scan reads a table and
+   does nothing else, whatever system prompt or messages a client sends —
+   otherwise "table_scan" would be free general image analysis. */
+const TABLE_SCAN_SYSTEM = [
+  "You read data tables from photos for a graphing tool used by students. Reply with one JSON object and nothing else:",
+  '{"columns":[{"name":"...","unit":"..."}],"rows":[["...","..."]]}',
+  '- columns: one entry per column of the table, left to right. name is the heading without its unit. unit is the unit given in the heading — from forms like "Time (s)", "Time / s", "t [s]" or "(t ± 0.1) / s" — or "" if there is none. If the heading gives an uncertainty such as "± 0.1", keep it in the name, e.g. "Time ± 0.1".',
+  "- rows: one array per row of data, top to bottom, with exactly one string per column.",
+  "- Copy every number exactly as written: the same digits, decimal places, trailing zeros and sign. Never calculate, round, correct or fill in a value. Write a decimal comma as a point (4,5 → 4.5) and a power of ten in e-notation (3.2 × 10⁻³ → 3.2e-3).",
+  "- A value written with its uncertainty, like 2.35 ± 0.05, stays as written.",
+  '- An empty, crossed-out or unreadable cell is "".',
+  "- Leave out rows that are not readings, such as a mean or total row, and any writing outside the table.",
+  "- A heading split over two lines is one heading. If there are several tables, read the largest.",
+  '- If there is no table in the photo, reply {"columns":[],"rows":[]}.',
+].join("\n");
+const TABLE_SCAN_USER = "Read the table in this photo.";
+// P0 A5: auth is required independent of payments. Guest mode (the app signed
+// out sends the anon key as Bearer) keeps working through a narrow,
+// table-backed allowance; disable entirely with AI_PROXY_ALLOW_GUESTS=false.
+const ALLOW_GUESTS = (Deno.env.get("AI_PROXY_ALLOW_GUESTS") ?? "false") === "true";
+const GUEST_DAILY = Number(Deno.env.get("AI_PROXY_GUEST_DAILY") ?? "20");
+const USER_DAILY = Number(Deno.env.get("AI_PROXY_USER_DAILY") ?? "300");
+const GUEST_MODEL = "openai/gpt-oss-20b";
+
+Deno.serve(async (req) => {
+  const origin = req.headers.get("origin") ?? "";
+
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsHeaders(origin) });
+  }
+  if (req.method !== "POST") {
+    return json({ error: "Method not allowed" }, 405, origin);
+  }
+
+  let userId: string | null = null;
+  const auth = await verifyUserJWT(req);
+  if ("error" in auth) {
+    // A failed JWT never falls through to a free ride anymore (the old
+    // payments-off path let anyone with the public anon key burn provider
+    // quota). Only the app's guest mode — Bearer = the project's anon-role
+    // JWT — may proceed, and it is rate-guarded below once the body parses.
+    const bearer = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+    if (!ALLOW_GUESTS || !isAnonRoleJwt(bearer)) {
+      return json({ error: auth.error }, auth.status, origin);
+    }
+    userId = null;
+  } else {
+    userId = auth.userId ?? null;
+  }
+
+  let body: {
+    message?: string;
+    messages?: Array<{ role: string; content: unknown }>;
+    imageBase64?: string;
+    mimeType?: string;
+    model?: string;
+    system?: string;
+    systemPrompt?: string;
+    /** Groq returns a single JSON object (requires "json" in messages per API rules). */
+    responseFormat?: "json_object";
+    /** Stream the reply as SSE (`data: {"delta":"…"}` … `data: [DONE]`). Text-only. */
+    stream?: boolean;
+    /** "table_scan": read a data table off a photo, metered on its own daily allowance. */
+    task?: string;
+    /**
+     * Agentic tool loop: round 1 is the user's message, rounds 2+ are hidden
+     * TOOL RESULTS continuations of the same turn — only round 1 is metered.
+     */
+    loopRound?: number;
+    routing?: {
+      mode?: string;
+      openaiCompatible?: {
+        apiKey?: string;
+        baseUrl?: string;
+        model?: string;
+      };
+      anthropic?: { apiKey?: string; model?: string };
+    };
+  };
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400, origin);
+  }
+
+  if (!body.messages || !Array.isArray(body.messages)) {
+    return json({ error: "Invalid request: messages required" }, 400, origin);
+  }
+
+  const hasImage = !!body.imageBase64;
+  const isTableScan = body.task === "table_scan";
+  if (isTableScan) {
+    if (!hasImage) {
+      return json({ error: "Invalid request: a photo is required" }, 400, origin);
+    }
+    if (String(body.imageBase64).length > SCAN_MAX_IMAGE_CHARS) {
+      return json({
+        error: "image_too_large",
+        message: "That photo is too big. Crop it to the table and try again.",
+      }, 413, origin);
+    }
+    body.system = TABLE_SCAN_SYSTEM;
+    body.systemPrompt = undefined;
+    body.messages = [{ role: "user", content: TABLE_SCAN_USER }];
+    body.responseFormat = "json_object";
+    body.stream = false;
+    body.routing = undefined;
+  }
+  const routeMode = body.routing?.mode ?? "";
+  // Vision always runs on Flux's own keys (callVision ignores routing), so an
+  // image request is never "bring your own key" — treating it as one skipped
+  // the plan check and the daily guard for a call Flux pays for.
+  const isBYOK = !hasImage && (routeMode === "openai_compatible" ||
+    routeMode === "anthropic_messages");
+
+  if (!userId) {
+    // Guest allowance: text-only, low model tier, hard per-IP+fingerprint
+    // daily cap. Fail CLOSED — anonymous traffic never rides a guard outage.
+    if (hasImage) {
+      return json({
+        error: "auth_required",
+        message: isTableScan
+          ? "Sign in to scan photos of tables — it's free."
+          : "Sign in to use image analysis.",
+      }, 401, origin);
+    }
+    const fp = typeof (body as { fingerprint?: unknown }).fingerprint === "string"
+      ? (body as { fingerprint: string }).fingerprint.slice(0, 128)
+      : "";
+    const bucket = "guest:" + await sha256Hex(
+      [clientIp(req), req.headers.get("user-agent") ?? "", fp].join("|"),
+    );
+    const count = await bumpDailyGuard(bucket);
+    if (count === null || count > GUEST_DAILY) {
+      return json({
+        error: "guest_daily_limit",
+        message: "Guest limit reached — sign in to keep using Flux AI.",
+        daily_limit: GUEST_DAILY,
+      }, 429, origin);
+    }
+    if (!isBYOK) body.model = GUEST_MODEL;
+  } else if (!PAYMENTS_ENABLED && !isBYOK) {
+    // Payment metering off ≠ unmetered: a basic per-user daily abuse stop.
+    // Fail OPEN — signed-in users shouldn't lose AI to a guard hiccup.
+    const count = await bumpDailyGuard("user:" + userId);
+    if (count !== null && count > USER_DAILY) {
+      return json({
+        error: "daily_limit_reached",
+        daily_limit: USER_DAILY,
+      }, 429, origin);
+    }
+  }
+
+  let entitlement: Entitlement | null = null;
+  // Whether we already debited a quota point (so we can refund on AI errors).
+  let chargedQuota = false;
+
+  if (PAYMENTS_ENABLED && userId && !isBYOK) {
+    entitlement = await getEntitlement(userId);
+
+    // Scanning a table is free on every plan; its own allowance is below.
+    if (hasImage && !isTableScan && !entitlement.imageAnalysis) {
+      return json({
+        error: "feature_requires_pro",
+        feature: "image_analysis",
+        message: "Image analysis requires Flux Pro",
+        upgrade_url: "https://azfermohammed.github.io/Fluxplanner/?upgrade=1",
+      }, 403, origin);
+    }
+
+    // Image calls aren't currently metered against the text quota.
+    // Agent-loop continuations (rounds 2+) of one user turn are charged once, on round 1.
+    const loopRound = Number(body.loopRound) || 1;
+    const isLoopContinuation = loopRound > 1 && loopRound <= 8;
+    if (!hasImage && !isLoopContinuation) {
+      const usage = await checkAndIncrementAIUsage(userId, entitlement);
+      if (!usage.allowed) {
+        return json({
+          error: "daily_limit_reached",
+          daily_used: usage.dailyUsed,
+          daily_limit: usage.dailyLimit,
+          monthly_used: usage.monthlyUsed,
+          monthly_limit: usage.monthlyLimit,
+          plan: entitlement.plan,
+          is_trialing: entitlement.isTrialing,
+          trial_ends_at: entitlement.trialEndsAt,
+          upgrade_url: "https://azfermohammed.github.io/Fluxplanner/?upgrade=1",
+        }, 429, origin);
+      }
+      chargedQuota = true;
+    }
+
+    if (entitlement.plan === "free" && !body.model) {
+      // Tool-calling turns need a model that can emit well-formed flux_tool
+      // JSON and reason; plain chat gets the smaller (still capable) model.
+      const sys = String(body.system ?? body.systemPrompt ?? "");
+      body.model = sys.includes("flux_tool")
+        ? "openai/gpt-oss-120b"
+        : "openai/gpt-oss-20b";
+    }
+  }
+
+  /* A scan's own daily allowance, counted before the call and given back if
+     the provider fails. Fails open like the signed-in guard above: a guard
+     hiccup should not cost a student the scan. */
+  let scanBucket: string | null = null;
+  let scanLimit = SCAN_DAILY;
+  let scansUsed: number | null = null;
+  if (isTableScan && userId) {
+    if (entitlement?.imageAnalysis) scanLimit = SCAN_PRO_DAILY;
+    const n = await bumpDailyGuard("scan:" + userId);
+    if (n !== null && n > scanLimit) {
+      return json({
+        error: "scan_daily_limit",
+        message: `You have used today's ${scanLimit} photo scans. They come back tomorrow.`,
+        daily_limit: scanLimit,
+        scans_left: 0,
+      }, 429, origin);
+    }
+    if (n !== null) {
+      scanBucket = "scan:" + userId;
+      scansUsed = n;
+    }
+  }
+
+  if (!isBYOK && !hasImage && !body.model) {
+    /* Same split as the paid path above, repeated here because that block
+       only runs when PAYMENTS_ENABLED is on — which it isn't by default, so
+       in practice *every* request was landing on gpt-oss-120b. Groq's rate
+       limits are per-model, so that put all traffic on a single 8,000
+       tokens/minute budget; two messages carrying a full planner snapshot
+       exhaust it, which is the "rate-limited right now" users kept hitting.
+       Plain chat answers well on the smaller model, emits far fewer tokens,
+       and draws on a separate bucket. */
+    const sys = String(body.system ?? body.systemPrompt ?? "");
+    body.model = sys.includes("flux_tool")
+      ? "openai/gpt-oss-120b"
+      : "openai/gpt-oss-20b";
+  }
+
+  // SSE streaming: text chat only (vision and json_object stay request/response).
+  const wantStream = body.stream === true && !hasImage &&
+    body.responseFormat !== "json_object";
+
+  let text: string;
+  try {
+    if (hasImage) {
+      text = await callVision(body);
+    } else if (routeMode === "openai_compatible") {
+      const rc = body.routing?.openaiCompatible;
+      if (!rc?.apiKey?.trim() || !rc?.model?.trim()) {
+        if (chargedQuota && userId) await refundAIUsage(userId);
+        return json({ error: "routing_incomplete_openai" }, 400, origin);
+      }
+      const cfg = {
+        apiKey: rc.apiKey.trim(),
+        baseUrl: (rc.baseUrl || "").trim(),
+        model: rc.model.trim(),
+      };
+      if (wantStream) {
+        const upstream = await openOpenAICompatibleStream(body, cfg);
+        return pipeSSE(upstream, openaiDelta, origin);
+      }
+      text = await callOpenAICompatible(body, cfg);
+    } else if (routeMode === "anthropic_messages") {
+      const rc = body.routing?.anthropic;
+      if (!rc?.apiKey?.trim() || !rc?.model?.trim()) {
+        if (chargedQuota && userId) await refundAIUsage(userId);
+        return json({ error: "routing_incomplete_anthropic" }, 400, origin);
+      }
+      const cfg = { apiKey: rc.apiKey.trim(), model: rc.model.trim() };
+      if (wantStream) {
+        const upstream = await openAnthropicStream(body, cfg);
+        return pipeSSE(upstream, anthropicDelta, origin);
+      }
+      text = await callAnthropicMessages(body, cfg);
+    } else {
+      if (wantStream) {
+        const upstream = await openGroqStream(body);
+        return pipeSSE(upstream, openaiDelta, origin);
+      }
+      text = await callGroq(body);
+    }
+  } catch (e) {
+    console.error("AI call failed:", e);
+    if (chargedQuota && userId) {
+      // Provider failed — give the user their quota back.
+      refundAIUsage(userId).catch(console.error);
+    }
+    if (scanBucket) refundDailyGuard(scanBucket).catch(console.error);
+    return json(
+      { error: "AI service error", details: String(e) },
+      502,
+      origin,
+    );
+  }
+
+  const scanInfo = isTableScan && scansUsed !== null
+    ? { scans_left: Math.max(0, scanLimit - scansUsed), daily_limit: scanLimit }
+    : {};
+  return json(
+    { content: [{ type: "text", text: stripThinkBlocks(text) }], ...scanInfo },
+    200,
+    origin,
+  );
+});
+
+/* ───────── SSE streaming ─────────
+ * Providers stream their own SSE shapes; we normalize to
+ *   data: {"delta":"…"}  …  data: [DONE]
+ * so the client only ever parses one format. Errors before the upstream
+ * connection opens flow through the normal JSON error path (quota refunded);
+ * mid-stream errors are emitted as a {"error":…} event.
+ */
+
+function openaiDelta(j: unknown): string | undefined {
+  const o = j as { choices?: Array<{ delta?: { content?: string } }> };
+  return o?.choices?.[0]?.delta?.content || undefined;
+}
+
+function anthropicDelta(j: unknown): string | undefined {
+  const o = j as { type?: string; delta?: { text?: string } };
+  return o?.type === "content_block_delta" ? (o.delta?.text || undefined) : undefined;
+}
+
+const THINK_OPEN = "<think>";
+const THINK_CLOSE = "</think>";
+
+/** Longest suffix of `s` that is a proper prefix of `tag` (a split-up tag). */
+function danglingTagPrefix(s: string, tag: string): string {
+  for (let n = Math.min(s.length, tag.length - 1); n > 0; n--) {
+    if (s.endsWith(tag.slice(0, n))) return s.slice(s.length - n);
+  }
+  return "";
+}
+
+/**
+ * gpt-oss and qwen3 reason before answering and Groq inlines that scratchpad
+ * into the reply as a <think>…</think> block; `reasoning_format: "hidden"` does
+ * not reliably suppress it, and nothing downstream strips it — so a student
+ * would read the model's notes to itself as if they were the answer.
+ *
+ * Returns a stateful filter because a streamed tag routinely straddles two
+ * chunks; anything that looks like the start of a tag is held back until the
+ * next chunk proves what it is.
+ */
+function makeThinkStripper(): (chunk: string) => string {
+  let inThink = false;
+  let carry = "";
+  return (chunk) => {
+    let s = carry + chunk;
+    carry = "";
+    let out = "";
+    for (;;) {
+      if (inThink) {
+        const i = s.indexOf(THINK_CLOSE);
+        if (i < 0) {
+          carry = danglingTagPrefix(s, THINK_CLOSE);
+          return out;
+        }
+        s = s.slice(i + THINK_CLOSE.length);
+        inThink = false;
+      } else {
+        const i = s.indexOf(THINK_OPEN);
+        if (i < 0) {
+          const held = danglingTagPrefix(s, THINK_OPEN);
+          out += held ? s.slice(0, s.length - held.length) : s;
+          carry = held;
+          return out;
+        }
+        out += s.slice(0, i);
+        s = s.slice(i + THINK_OPEN.length);
+        inThink = true;
+      }
+    }
+  };
+}
+
+/** Whole-response equivalent of {@link makeThinkStripper}. */
+function stripThinkBlocks(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    // A truncated reply can open the block and never close it.
+    .replace(/<think>[\s\S]*$/i, "")
+    .trim();
+}
+
+function pipeSSE(
+  upstream: Response,
+  extract: (j: unknown) => string | undefined,
+  origin: string,
+): Response {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const reader = upstream.body!.getReader();
+  const stripThink = makeThinkStripper();
+  let buf = "";
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const emit = (obj: unknown) =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line.startsWith("data:")) continue;
+            const data = line.slice(5).trim();
+            if (!data || data === "[DONE]") continue;
+            try {
+              const t = extract(JSON.parse(data));
+              if (t) {
+                const visible = stripThink(t);
+                if (visible) emit({ delta: visible });
+              }
+            } catch {
+              // Partial/non-JSON keepalive line — skip.
+            }
+          }
+        }
+      } catch (e) {
+        emit({ error: String(e) });
+      }
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+    cancel() {
+      try {
+        reader.cancel();
+      } catch { /* upstream already closed */ }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      ...corsHeaders(origin),
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+    },
+  });
+}
+
+/**
+ * Per-model rate limits are independent on Groq, so when one model is
+ * saturated we step down the ladder instead of surfacing a raw 429.
+ */
+const GROQ_MODEL_LADDER = [
+  "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
+];
+
+/**
+ * Groq retires models on its own schedule and a retired id returns 404
+ * model_not_found. A client can pin one indefinitely — a saved provider
+ * preference outlives the model it names — so drop known-dead ids before
+ * building the chain rather than spending a request rediscovering they're gone.
+ */
+const GROQ_RETIRED_MODELS = new Set([
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "llama-3.1-70b-versatile",
+  "llama3-70b-8192",
+  "llama3-8b-8192",
+  "mixtral-8x7b-32768",
+  "gemma-7b-it",
+  "gemma2-9b-it",
+  // Retired by 2026-09-28: every request that reached it came back 404
+  // model_not_found, so it was the last, dead rung of the ladder above.
+  "qwen/qwen3.6-27b",
+]);
+
+function groqFallbackChain(model: string): string[] {
+  const chain = GROQ_RETIRED_MODELS.has(model) ? [] : [model];
+  for (const m of GROQ_MODEL_LADDER) if (!chain.includes(m)) chain.push(m);
+  return chain;
+}
+
+function isRetryableGroqStatus(status: number): boolean {
+  // 413: free-tier per-request token caps differ per model — a request too
+  // big for gpt-oss-120b often fits the next rung, so step down the ladder.
+  // 404: the model was decommissioned. Retiring one id should cost that rung,
+  // not the whole feature — without this a single dead model took Flux AI down
+  // completely, because the chain aborted before it reached a live rung.
+  return status === 404 || status === 413 || status === 429 ||
+    status === 498 || status === 499 || status >= 500;
+}
+
+function isRetryableGroqError(e: unknown): boolean {
+  const s = String(e);
+  return /Groq error (404|413|429|498|499|5\d\d)/.test(s) ||
+    /model_not_found/i.test(s) ||
+    /rate.?limit/i.test(s) || /request too large/i.test(s) ||
+    /over capacity/i.test(s);
+}
+
+/**
+ * A 429 body states the exact wait: "Please try again in 7.51s". Stepping down
+ * the model ladder takes milliseconds, so against a per-minute token cap every
+ * rung is still limited by the time we reach it — the ladder alone can never
+ * clear one. Waiting the stated time and trying once more does.
+ */
+function groqRetryAfterMs(e: unknown): number | null {
+  const m = /try again in ([\d.]+)\s*s/i.exec(String(e));
+  if (!m) return null;
+  const ms = Math.ceil(Number(m[1]) * 1000);
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
+/** Cap the hold, so a long cooldown fails fast instead of stalling the request. */
+const GROQ_MAX_RETRY_WAIT_MS = 12_000;
+const napFor = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function openGroqStream(body: {
+  messages?: Array<{ role: string; content: unknown }>;
+  message?: string;
+  model?: string;
+  system?: string;
+  systemPrompt?: string;
+}): Promise<Response> {
+  const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
+  if (!GROQ_API_KEY) throw new Error("GROQ_API_KEY not set");
+  let lastErr = "";
+  let sawTooLarge = false;
+  let compact = false;
+  // Up to three passes. If every model refused the request as too large, the
+  // next pass sends a shortened conversation (see fitMessages). If the ladder
+  // ran into a rate limit, wait the cooldown Groq quoted and run it once more.
+  // Errors that are neither (a bad key) surface immediately.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      if (sawTooLarge && !compact) {
+        compact = true;
+        console.warn("ai-proxy: too large for every model, retrying with a shorter conversation");
+      } else {
+        const waitMs = groqRetryAfterMs(lastErr);
+        if (waitMs === null || waitMs > GROQ_MAX_RETRY_WAIT_MS) break;
+        console.warn(`ai-proxy: rate limited, waiting ${waitMs}ms before retry`);
+        await napFor(waitMs);
+      }
+    }
+    sawTooLarge = false;
+    for (const model of groqFallbackChain(body.model ?? GROQ_MODEL_LADDER[0])) {
+      const payload = buildOpenAIChatPayload(body, model, compact);
+      payload.stream = true;
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok && res.body) return res;
+      const err = await res.text().catch(() => "");
+      lastErr = `Groq error ${res.status}: ${err}`;
+      if (res.status === 413) sawTooLarge = true;
+      if (!isRetryableGroqStatus(res.status)) break;
+      console.warn(`ai-proxy: ${model} unavailable (${res.status}), falling back`);
+    }
+  }
+  throw new Error(lastErr || "Groq error: all models unavailable");
+}
+
+async function openOpenAICompatibleStream(
+  body: {
+    messages?: Array<{ role: string; content: unknown }>;
+    message?: string;
+    model?: string;
+    system?: string;
+    systemPrompt?: string;
+  },
+  rc: { apiKey: string; baseUrl: string; model: string },
+): Promise<Response> {
+  const payload = buildOpenAIChatPayload(body, rc.model || body.model || "gpt-4o-mini");
+  payload.stream = true;
+  const res = await fetch(await openaiCompatibleUrl(rc.baseUrl), {
+    redirect: "error",
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${rc.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok || !res.body) {
+    const err = await res.text().catch(() => "");
+    throw new Error(`OpenAI-compatible error ${res.status}: ${err}`);
+  }
+  return res;
+}
+
+async function openAnthropicStream(
+  body: {
+    messages?: Array<{ role: string; content: unknown }>;
+    system?: string;
+    systemPrompt?: string;
+  },
+  rc: { apiKey: string; model: string },
+): Promise<Response> {
+  const { system, messages } = buildAnthropicPayload(body);
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": rc.apiKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: rc.model,
+      max_tokens: 2048,
+      system,
+      messages,
+      stream: true,
+    }),
+  });
+  if (!res.ok || !res.body) {
+    const err = await res.text().catch(() => "");
+    throw new Error(`Anthropic error ${res.status}: ${err}`);
+  }
+  return res;
+}
+
+async function openaiCompatibleUrl(baseUrl: string): Promise<string> {
+  let base = baseUrl.replace(/\/+$/, "");
+  if (!base) base = "https://api.openai.com/v1";
+  // The server calls this address, so it may never point at anything private:
+  // not by its name, and not by what that name resolves to.
+  const safe = publicHttpsUrl(base);
+  if (!safe || !(await resolvesToPublicHost(new URL(safe).hostname))) {
+    throw new Error("OpenAI-compatible base URL must be a public https address");
+  }
+  base = safe.replace(/\/+$/, "");
+  return base.endsWith("/chat/completions")
+    ? base
+    : base.endsWith("/v1")
+    ? `${base}/chat/completions`
+    : `${base}/v1/chat/completions`;
+}
+
+function buildAnthropicPayload(body: {
+  messages?: Array<{ role: string; content: unknown }>;
+  system?: string;
+  systemPrompt?: string;
+}): {
+  system: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+} {
+  const systemParts: string[] = [];
+  const topSys = body.system ?? body.systemPrompt;
+  if (topSys) systemParts.push(String(topSys));
+
+  const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
+  const raw = Array.isArray(body.messages) ? [...body.messages] : [];
+  for (const m of raw) {
+    const roleStr = String(m.role || "");
+    if (roleStr === "system") {
+      systemParts.push(
+        typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+      );
+      continue;
+    }
+    messages.push({
+      role: roleStr === "assistant" ? "assistant" : "user",
+      content:
+        typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+    });
+  }
+  return { system: systemParts.join("\n\n").slice(0, 200000), messages };
+}
+
+async function callOpenAICompatible(
+  body: {
+    messages?: Array<{ role: string; content: unknown }>;
+    message?: string;
+    model?: string;
+    system?: string;
+    systemPrompt?: string;
+    responseFormat?: "json_object";
+  },
+  rc: { apiKey: string; baseUrl: string; model: string },
+): Promise<string> {
+  const model = rc.model || body.model || "gpt-4o-mini";
+  const payload = buildOpenAIChatPayload(body, model);
+
+  const res = await fetch(await openaiCompatibleUrl(rc.baseUrl), {
+    redirect: "error",
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${rc.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`OpenAI-compatible error ${res.status}: ${err}`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content ?? "";
+}
+
+async function callAnthropicMessages(
+  body: {
+    messages?: Array<{ role: string; content: unknown }>;
+    message?: string;
+    system?: string;
+    systemPrompt?: string;
+  },
+  rc: { apiKey: string; model: string },
+): Promise<string> {
+  const { system, messages } = buildAnthropicPayload(body);
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": rc.apiKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: rc.model,
+      max_tokens: 2048,
+      system,
+      messages,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Anthropic error ${res.status}: ${err}`);
+  }
+
+  const data = await res.json();
+  const blocks = data.content;
+  if (!Array.isArray(blocks)) return "";
+  return blocks
+    .filter((b: { type?: string }) => b && b.type === "text")
+    .map((b: { text?: string }) => b.text ?? "")
+    .join("\n")
+    .trim();
+}
+
+/**
+ * Groq's free tier allows 8,000 tokens per minute, per model — and that budget
+ * covers the prompt as well as the reply. Flux builds its system prompt by
+ * concatenating ~16 clipped snapshots of the planner (classes 4,000 chars,
+ * Canvas 9,200, two hub blobs 6,200 and 4,500, a dozen more at 800–2,200), so
+ * a well-populated account can send 40,000 characters — roughly 10,000 tokens,
+ * more than the entire minute's allowance, before the model writes a word.
+ * Measured: a 2,880-token prompt cost 3,300–6,500 tokens per request, so a
+ * student got one or two messages a minute before being refused.
+ *
+ * Capping here rather than in the app means no caller — page, extension or
+ * stale cached bundle — can blow the budget. The head is kept because the
+ * instructions come first and the bulk data is appended after them.
+ */
+const SYSTEM_PROMPT_MAX_CHARS = 6000;
+
+/**
+ * The retry for a conversation every model refused as too large: about 3,500
+ * tokens of prompt (≈4 characters a token) plus a 1,024-token answer, which
+ * sits well inside the smallest per-minute allowance on the ladder. The
+ * instructions (already capped above) and the newest turns are what is kept.
+ */
+const COMPACT_PROMPT_CHARS = 14_000;
+
+function clampSystemPrompt(system: unknown): string | undefined {
+  if (typeof system !== "string" || !system) return system as undefined;
+  if (system.length <= SYSTEM_PROMPT_MAX_CHARS) return system;
+  console.warn(
+    `ai-proxy: system prompt ${system.length} chars, trimming to ${SYSTEM_PROMPT_MAX_CHARS}`,
+  );
+  return system.slice(0, SYSTEM_PROMPT_MAX_CHARS) +
+    "\n\n[Context trimmed to fit the model's per-minute token budget. If you " +
+    "need a detail that isn't here, ask the student for it rather than guessing.]";
+}
+
+function buildOpenAIChatPayload(
+  body: {
+    messages?: Array<{ role: string; content: unknown }>;
+    message?: string;
+    model?: string;
+    system?: string;
+    systemPrompt?: string;
+    responseFormat?: "json_object";
+  },
+  model: string,
+  compact = false,
+): Record<string, unknown> {
+  const system = clampSystemPrompt(body.system ?? body.systemPrompt);
+  let messages = Array.isArray(body.messages) ? [...body.messages] : [];
+  if (system && !messages.some((m) => m.role === "system")) {
+    messages = [{ role: "system", content: system }, ...messages];
+  }
+  if (messages.length === 0) {
+    messages = [{ role: "user", content: body.message ?? "" }];
+  }
+  if (compact) messages = fitMessages(messages, COMPACT_PROMPT_CHARS);
+  const jsonMode = body.responseFormat === "json_object";
+  const isGptOss = /gpt-oss/.test(model);
+  // gpt-oss and qwen3 think before answering. Left alone Groq inlines that
+  // scratchpad into the reply as a <think> block, and nothing downstream
+  // strips it — the student would read the model's notes to itself.
+  const isReasoning = isGptOss || /qwen3/.test(model);
+  const payload: Record<string, unknown> = {
+    model,
+    messages,
+    /* Groq reserves the full max_tokens against the per-minute budget up
+       front, whether the reply uses it or not: a refused request reported
+       "Requested 5777" for a ~1,700-token prompt, which is exactly prompt +
+       max_tokens. Asking for 8,192 therefore spent most of an 8,000-token
+       minute on headroom that a two-sentence answer never touched, and the
+       second message of a conversation was refused.
+
+       2,048 is ~1,500 words — far longer than any answer this app produces —
+       and roughly triples how many messages fit in a minute. Reasoning is
+       drawn from this same allowance, which is affordable now that
+       reasoning_effort is low/medium rather than high. */
+    max_tokens: jsonMode || compact ? 1024 : 2048,
+    temperature: jsonMode ? 0.2 : 0.7,
+  };
+  /* Reasoning is not free: the scratchpad is generated before the answer and
+     counts against the same per-minute token budget, even though
+     reasoning_format:"hidden" means nobody ever reads it. At "high" a bare
+     "hi" spent hundreds of tokens deliberating, and two real questions were
+     enough to trip Groq's limit.
+
+     So spend it where it changes the answer: tool-calling turns need to emit
+     well-formed flux_tool JSON and reason about the planner, and get medium.
+     Plain chat gets low — it barely moves quality there and is most of the
+     traffic. */
+  if (isGptOss && !jsonMode) {
+    payload.reasoning_effort = /gpt-oss-120b/.test(model) ? "medium" : "low";
+  }
+  if (isReasoning) payload.reasoning_format = "hidden";
+  if (jsonMode) payload.response_format = { type: "json_object" };
+  return payload;
+}
+
+async function postGroqChatCompletion(
+  payload: Record<string, unknown>,
+): Promise<string> {
+  const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
+  if (!GROQ_API_KEY) throw new Error("GROQ_API_KEY not set");
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${GROQ_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Groq error ${res.status}: ${err}`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content ?? "";
+}
+
+async function callGroq(body: {
+  messages?: Array<{ role: string; content: unknown }>;
+  message?: string;
+  model?: string;
+  system?: string;
+  systemPrompt?: string;
+  responseFormat?: "json_object";
+}): Promise<string> {
+  let lastErr: unknown = null;
+  let sawTooLarge = false;
+  let compact = false;
+  // Same passes as the streaming path: a shorter conversation when every model
+  // said "too large", one wait-and-retry when the whole ladder is rate limited,
+  // otherwise fail on the first real error.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      if (sawTooLarge && !compact) {
+        compact = true;
+        console.warn("ai-proxy: too large for every model, retrying with a shorter conversation");
+      } else {
+        const waitMs = groqRetryAfterMs(lastErr);
+        if (waitMs === null || waitMs > GROQ_MAX_RETRY_WAIT_MS) break;
+        console.warn(`ai-proxy: rate limited, waiting ${waitMs}ms before retry`);
+        await napFor(waitMs);
+      }
+    }
+    sawTooLarge = false;
+    for (const model of groqFallbackChain(body.model ?? GROQ_MODEL_LADDER[0])) {
+      try {
+        return await postGroqChatCompletion(buildOpenAIChatPayload(body, model, compact));
+      } catch (e) {
+        lastErr = e;
+        if (isTooLargeError(e)) sawTooLarge = true;
+        if (!isRetryableGroqError(e)) throw e;
+        console.warn(`ai-proxy: ${model} unavailable, falling back`);
+      }
+    }
+  }
+  throw lastErr ?? new Error("Groq error: all models unavailable");
+}
+
+/** Vision when `GEMINI_API_KEY` is unset — same stack as `gemini-proxy` (Groq + Llama 4 Scout). */
+async function callGroqVision(body: {
+  messages?: Array<{ role: string; content: unknown }>;
+  imageBase64?: string;
+  mimeType?: string;
+  system?: string;
+  systemPrompt?: string;
+}): Promise<string> {
+  const mime = body.mimeType || "image/jpeg";
+  const b64 = String(body.imageBase64 || "").replace(/\s/g, "");
+  if (!b64) throw new Error("Missing image data for vision request");
+
+  // Groq retired Llama 4 Scout on 2026-07-17 and currently lists no vision
+  // model, so this fallback has no default that works. Gemini is the real
+  // image path; say so plainly rather than surfacing a bare 404 from Groq.
+  const visionModel = (Deno.env.get("GROQ_VISION_MODEL") ?? "").trim();
+  if (!visionModel || GROQ_RETIRED_MODELS.has(visionModel)) {
+    throw new Error(
+      "Image analysis needs GEMINI_API_KEY (preferred), or set GROQ_VISION_MODEL " +
+        "to a Groq model that accepts images.",
+    );
+  }
+  const dataUrl = `data:${mime};base64,${b64}`;
+
+  const system = String(body.system ?? body.systemPrompt ?? "").trim();
+  const raw = Array.isArray(body.messages) ? [...body.messages] : [];
+  if (raw.length === 0) throw new Error("No messages for vision request");
+
+  const last = raw[raw.length - 1]!;
+  const lastRole = String(last.role || "user");
+  const lastText =
+    typeof last.content === "string"
+      ? last.content
+      : JSON.stringify(last.content ?? "");
+
+  const multimodalContent: unknown[] = [
+    {
+      type: "image_url",
+      image_url: { url: dataUrl },
+    },
+    {
+      type: "text",
+      text: lastText.trim() || "Answer using the image.",
+    },
+  ];
+
+  const history = raw.slice(0, -1).map((m) => {
+    const role = m.role === "assistant" ? "assistant" : "user";
+    const content =
+      typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+    return { role, content };
+  });
+
+  const groqMessages: Array<{ role: string; content: unknown }> = [];
+  if (system) groqMessages.push({ role: "system", content: system });
+  groqMessages.push(...history);
+  groqMessages.push({
+    role: lastRole === "assistant" ? "assistant" : "user",
+    content: multimodalContent,
+  });
+
+  return await postGroqChatCompletion({
+    model: visionModel,
+    messages: groqMessages,
+    temperature: 0.3,
+    max_tokens: 2048,
+  });
+}
+
+function isGeminiQuotaOrRateLimitError(err: unknown): boolean {
+  const s = String(err);
+  if (/\b429\b/.test(s)) return true;
+  if (/RESOURCE_EXHAUSTED/i.test(s)) return true;
+  if (/quota exceeded/i.test(s.toLowerCase())) return true;
+  if (/rate limit/i.test(s.toLowerCase())) return true;
+  return false;
+}
+
+/**
+ * Image / vision: set `AI_PROXY_VISION_PROVIDER=groq` to skip Gemini entirely.
+ * Otherwise tries Gemini when `GEMINI_API_KEY` is set; on 429 / quota errors falls back to Groq if `GROQ_API_KEY` is set.
+ */
+async function callVision(body: {
+  message?: string;
+  messages?: Array<{ role: string; content: unknown }>;
+  imageBase64?: string;
+  mimeType?: string;
+  system?: string;
+  systemPrompt?: string;
+  responseFormat?: "json_object";
+}): Promise<string> {
+  const geminiKey = Deno.env.get("GEMINI_API_KEY")?.trim();
+  const groqKey = Deno.env.get("GROQ_API_KEY")?.trim();
+  const forceGroq =
+    Deno.env.get("AI_PROXY_VISION_PROVIDER")?.trim().toLowerCase() === "groq";
+
+  // Groq vision rate-limited → Gemini can cover (and vice versa below).
+  const groqVisionWithGeminiFallback = async (): Promise<string> => {
+    try {
+      return await callGroqVision(body);
+    } catch (e) {
+      if (isRetryableGroqError(e) && geminiKey) {
+        console.warn(
+          "ai-proxy: Groq vision failed (rate limit), using Gemini",
+        );
+        return await callGemini(body);
+      }
+      throw e;
+    }
+  };
+
+  if (forceGroq) {
+    if (!groqKey) {
+      throw new Error(
+        "AI_PROXY_VISION_PROVIDER=groq but GROQ_API_KEY is not set",
+      );
+    }
+    return await groqVisionWithGeminiFallback();
+  }
+
+  if (geminiKey) {
+    try {
+      return await callGemini(body);
+    } catch (e) {
+      if (isGeminiQuotaOrRateLimitError(e) && groqKey) {
+        console.warn(
+          "ai-proxy: Gemini vision failed (quota/rate limit), using Groq",
+        );
+        return await callGroqVision(body);
+      }
+      throw e;
+    }
+  }
+
+  if (!groqKey) {
+    throw new Error("No GEMINI_API_KEY or GROQ_API_KEY for vision");
+  }
+  return await groqVisionWithGeminiFallback();
+}
+
+async function callGemini(body: {
+  message?: string;
+  messages?: Array<{ role: string; content: unknown }>;
+  imageBase64?: string;
+  mimeType?: string;
+  system?: string;
+  systemPrompt?: string;
+  responseFormat?: "json_object";
+}): Promise<string> {
+  const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+  if (!GEMINI_API_KEY) {
+    throw new Error(
+      "GEMINI_API_KEY not set (caller should use Groq vision when Gemini is disabled)",
+    );
+  }
+
+  const lastMsg = body.messages?.length
+    ? String(body.messages[body.messages.length - 1]?.content ?? "")
+    : (body.message ?? "");
+  const systemRaw = body.system ?? body.systemPrompt ?? "";
+  const system = String(systemRaw).trim();
+  const userText = String(lastMsg).trim() || "Answer based on the attached image.";
+
+  const parts: unknown[] = [];
+  if (body.imageBase64 && body.mimeType) {
+    const data = String(body.imageBase64).replace(/\s/g, "");
+    parts.push({
+      inlineData: { mimeType: String(body.mimeType), data },
+    });
+  }
+  parts.push({ text: userText });
+
+  const reqBody: Record<string, unknown> = {
+    contents: [{ parts }],
+  };
+  if (system) {
+    reqBody.systemInstruction = { parts: [{ text: system }] };
+  }
+  if (body.responseFormat === "json_object") {
+    // Copying a table: JSON out, and no creativity with the digits.
+    reqBody.generationConfig = {
+      responseMimeType: "application/json",
+      temperature: 0.1,
+      maxOutputTokens: 8192,
+    };
+  }
+
+  /* The key travels in a header, never in the address. A failed connection
+     throws an error that quotes the address, and that error text is returned
+     to the browser as "details" — with the key in the address, one network
+     blip would have handed Flux's Gemini key to whoever was scanning. */
+  const post = (model: string) =>
+    fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
+        body: JSON.stringify(reqBody),
+      },
+    );
+
+  /* Google retires Gemini ids on its own schedule, and a retired one answers
+     404. The code used to name exactly one — gemini-2.0-flash — so when it
+     went, every photo scan failed with nothing to fall back to. Now: the pinned
+     id if there is one, the one that last worked, Google's own "latest flash"
+     alias, and if every one of those is gone, the newest stable Flash that
+     Google's model list says this key can use. Only "that model is gone"
+     moves on; any other error (a bad photo, a quota) is the real answer. */
+  const tried = new Set<string>();
+  let lastErr = "";
+  const attempt = async (model: string): Promise<string | null> => {
+    if (!model || tried.has(model)) return null;
+    tried.add(model);
+    const res = await post(model);
+    if (res.ok) {
+      _geminiWorkingModel = model;
+      const data = await res.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    }
+    const err = await res.text();
+    lastErr = `Gemini error ${res.status}: ${err}`;
+    if (!isGeminiModelGone(res.status, err)) throw new Error(lastErr);
+    console.warn(`ai-proxy: Gemini model ${model} is gone (${res.status}), trying the next`);
+    if (_geminiWorkingModel === model) _geminiWorkingModel = null;
+    return null;
+  };
+
+  const pinned = (Deno.env.get("GEMINI_VISION_MODEL") ?? "").trim();
+  for (const model of [pinned, _geminiWorkingModel ?? "", "gemini-flash-latest"]) {
+    const out = await attempt(model);
+    if (out !== null) return out;
+  }
+  const discovered = await discoverGeminiFlash(GEMINI_API_KEY);
+  if (discovered) {
+    const out = await attempt(discovered);
+    if (out !== null) return out;
+  }
+  throw new Error(lastErr || "Gemini error: no usable model");
+}
+
+/** The Gemini id that last answered, tried early next time. Lives as long as the isolate. */
+let _geminiWorkingModel: string | null = null;
+
+/** Newest stable Flash this key can call, from Google's model list; null if the list is unavailable. */
+async function discoverGeminiFlash(key: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+      { headers: { "x-goog-api-key": key } },
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const found = newestGeminiFlash(data?.models ?? []);
+    if (found) console.warn(`ai-proxy: Google's model list offers ${found}`);
+    return found;
+  } catch (e) {
+    console.error("ai-proxy: could not list Gemini models", e);
+    return null;
+  }
+}

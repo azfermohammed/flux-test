@@ -1,0 +1,329 @@
+/* Educator personal #dashboard — hide student planner chrome */
+#dashboard.flux-educator-dash #fluxClassAlertBanner,
+#dashboard.flux-educator-dash #dashHero,
+#dashboard.flux-educator-dash .dash-mob-stack,
+#dashboard.flux-educator-dash #weeklyReviewBanner,
+#dashboard.flux-educator-dash .dash-alerts,
+#dashboard.flux-educator-dash #fluxDashSections,
+#dashboard.flux-educator-dash > .flux-widget-grid,
+#dashboard.flux-educator-dash #fluxWidgetGrid_dashboard,
+#dashboard.flux-educator-dash #fluxGratitudeCard,
+#dashboard.flux-educator-dash #fluxImportantTodayCard {
+  display: none !important;
+}
+
+/* Staff personal mode — no class subject pickers */
+html.flux-staff-personal-no-subjects #addEventSubjectRow,
+html.flux-staff-personal-no-subjects #dashAddTaskModal .irow.modal-labeled-row > div:has(#taskSubject),
+html.flux-staff-personal-no-subjects #editModal .mrow:has(#editSubject) {
+  display: none !important;
+}
+
+/* Flux Staff Dash Board — educator personal widget grid */
+.fsdb-root {
+  padding: 16px 20px 28px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.fsdb-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.fsdb-toolbar-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+.fsdb-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.fsdb-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 12px;
+  grid-auto-rows: minmax(64px, auto);
+}
+.fsdb-widget {
+  background: var(--card2);
+  border: 1px solid var(--border2);
+  border-radius: 14px;
+  padding: 0;
+  min-height: 72px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.fsdb-widget.fsdb-widget--drag-over {
+  border-color: rgba(var(--accent-rgb), 0.5);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.15);
+}
+.fsdb-widget[data-w='4'] {
+  grid-column: span 4;
+}
+.fsdb-widget[data-w='6'] {
+  grid-column: span 6;
+}
+.fsdb-widget[data-w='8'] {
+  grid-column: span 8;
+}
+.fsdb-widget[data-w='12'] {
+  grid-column: span 12;
+}
+@media (max-width: 768px) {
+  .fsdb-widget[data-w='4'],
+  .fsdb-widget[data-w='6'],
+  .fsdb-widget[data-w='8'],
+  .fsdb-widget[data-w='12'] {
+    grid-column: span 12;
+  }
+}
+.fsdb-widget-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.12);
+  flex-shrink: 0;
+}
+.fsdb-widget-drag {
+  cursor: grab;
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 2px 4px;
+  user-select: none;
+  flex-shrink: 0;
+}
+.fsdb-widget-drag:active {
+  cursor: grabbing;
+}
+.fsdb-widget-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fsdb-widget-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.fsdb-widget-btn {
+  background: none;
+  border: none;
+  color: var(--muted2);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+.fsdb-widget-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+.fsdb-widget-body {
+  padding: 10px 12px 12px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.fsdb-welcome-hello {
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.4px;
+}
+.fsdb-welcome-sub {
+  font-size: 0.78rem;
+  color: var(--muted2);
+  margin-top: 4px;
+}
+.fsdb-welcome-tasks {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border2);
+}
+.fsdb-welcome-tasks-hd {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 8px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.fsdb-welcome-tasks-body .fsdb-task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 0.8rem;
+}
+.fsdb-welcome-tasks-body .fsdb-empty {
+  font-size: 0.78rem;
+  color: var(--muted2);
+  margin: 0;
+}
+.fsdb-hint-modal {
+  z-index: 650;
+}
+.fsdb-hint-card {
+  max-width: 400px;
+}
+.fsdb-hint-copy {
+  font-size: 0.84rem;
+  color: var(--text2);
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+.fsdb-mini-cal-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.fsdb-mini-cal-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.fsdb-mini-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  font-size: 0.62rem;
+}
+.fsdb-mini-dow {
+  text-align: center;
+  color: var(--muted);
+  font-weight: 700;
+  padding: 2px 0;
+}
+.fsdb-mini-day {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--muted2);
+  position: relative;
+}
+.fsdb-mini-day:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.fsdb-mini-day--today {
+  background: rgba(var(--accent-rgb), 0.2);
+  color: var(--accent);
+  font-weight: 800;
+}
+.fsdb-mini-day--has {
+  font-weight: 700;
+  color: var(--text);
+}
+.fsdb-mini-day--has::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.fsdb-mini-day--other {
+  opacity: 0.35;
+}
+.fsdb-week-bars {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+  min-height: 56px;
+}
+.fsdb-week-col {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+}
+.fsdb-week-bar {
+  width: 100%;
+  max-width: 28px;
+  margin: 0 auto;
+  border-radius: 4px 4px 2px 2px;
+  background: rgba(var(--accent-rgb), 0.35);
+  min-height: 6px;
+}
+.fsdb-week-bar--heavy {
+  background: var(--gold);
+}
+.fsdb-week-lbl {
+  font-size: 0.58rem;
+  color: var(--muted2);
+  margin-top: 4px;
+}
+.fsdb-task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+.fsdb-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+}
+.fsdb-photo-thumb {
+  aspect-ratio: 1;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border2);
+  position: relative;
+}
+.fsdb-photo-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.fsdb-photo-del {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: rgba(0, 0, 0, 0.65);
+  border: none;
+  color: #fff;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.fsdb-empty {
+  font-size: 0.72rem;
+  color: var(--muted2);
+  padding: 8px 0;
+}
+
+/* ── Smooth pointer drag (v2) ── */
+.fsdb-widget-drag {
+  cursor: grab;
+  touch-action: none;   /* pointer drag owns the gesture on touch screens */
+  user-select: none;
+}
+.fsdb-widget--lifting {
+  cursor: grabbing;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .45), 0 0 0 1px rgba(95, 142, 255, .35);
+  opacity: .96;
+  will-change: transform;
+}
+.fsdb-widget--lifting .fsdb-widget-drag { cursor: grabbing; }

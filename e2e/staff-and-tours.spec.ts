@@ -1,0 +1,333 @@
+import { expect, test, type Page } from '@playwright/test';
+import { gotoScenario } from './helpers';
+
+/**
+ * The tutorials, the login page and the staff workspace, checked against what
+ * the planner actually has.
+ *
+ * The tour used to be one fixed list: it walked students to Flux AI and Notes
+ * (both gone from the sidebar), told them to link Google Calendar (paused),
+ * pointed at hidden buttons, and gave teachers the student steps. The login
+ * page advertised an AI tutor, AI flashcards and integrations that are off.
+ * These specs pin the fixes: every tour step names something on screen, and
+ * the login page names nothing the planner cannot do.
+ */
+
+async function startTour(page: Page) {
+  await page.evaluate(() => (window as any).resetPlannerTour());
+  await expect(page.locator('.ftour-card')).toBeVisible({ timeout: 5000 });
+}
+
+/** Walks the tour to the end, returning each step's title. */
+async function walkTour(page: Page): Promise<string[]> {
+  const titles: string[] = [];
+  for (let i = 0; i < 20; i++) {
+    const card = page.locator('.ftour-card');
+    if (!(await card.count())) break;
+    titles.push((await page.locator('.ftour-title').textContent())?.trim() || '');
+    const before = await page.locator('.ftour-count').textContent();
+    await page.locator('.ftour-next').click();
+    // Wait for the step to change (or the tour to end), not a fixed delay —
+    // under load a step can take longer than any fixed pause.
+    await page.waitForFunction((b) => {
+      const c = document.querySelector('.ftour-count');
+      return !c || c.textContent !== b;
+    }, before, { timeout: 8000 });
+  }
+  return titles;
+}
+
+test.describe('planner tour', () => {
+  test('a student is walked through the tabs they actually have', async ({ page }) => {
+    await gotoScenario(page, 'student-semester');
+    await startTour(page);
+    const titles = await walkTour(page);
+    expect(titles[0]).toBe('Dashboard');
+    for (const t of ['Calendar', 'Time', 'School Info', 'Study tools', 'College Prep', 'Mood', 'Settings']) {
+      expect(titles, `no step for ${t}`).toContain(t);
+    }
+    for (const gone of ['Flux AI', 'Notes & flashcards', 'Task views']) {
+      expect(titles, `the tour still describes ${gone}`).not.toContain(gone);
+    }
+    // Every step was countable up front, so the counter never overshot.
+    await expect(page.locator('.ftour')).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('flux_tour_completed'))).toBe('true');
+    // Finishing brings you back to the dashboard rather than leaving you on Settings.
+    await expect(page.locator('#dashboard.panel.active')).toBeVisible();
+  });
+
+  test('each step opens the tab it describes, and Back goes back', async ({ page }) => {
+    await gotoScenario(page, 'student-semester');
+    await startTour(page);
+    await page.locator('.ftour-next').click(); // New task
+    await page.locator('.ftour-next').click(); // Calendar
+    await expect(page.locator('.ftour-title')).toHaveText('Calendar');
+    await expect(page.locator('#calendar.panel.active')).toBeVisible();
+    await expect(page.locator('.ftour-count')).toContainText('3 of');
+    await page.locator('.ftour-back').click();
+    await expect(page.locator('.ftour-title')).toHaveText('New task');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.ftour')).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('flux_tour_completed'))).toBe('true');
+  });
+
+  test('a teacher gets their own steps, not the student list', async ({ page }) => {
+    await gotoScenario(page, 'teacher-workflow');
+    await startTour(page);
+    const titles = await walkTour(page);
+    for (const t of ['Work and Personal', 'Work hub', 'Messages', 'Lesson Hub', 'Resources']) {
+      expect(titles, `no step for ${t}`).toContain(t);
+    }
+    // Rosters is hidden while students can't join a class.
+    expect(titles).not.toContain('Rosters');
+    for (const studentOnly of ['Study tools', 'College Prep', 'Mood', 'School Info']) {
+      expect(titles).not.toContain(studentOnly);
+    }
+  });
+
+  test('a counselor tour covers Meetings and Caseload tools', async ({ page }) => {
+    await gotoScenario(page, 'counselor-path');
+    await startTour(page);
+    const titles = await walkTour(page);
+    expect(titles).toContain('Meetings');
+    expect(titles).toContain('Caseload tools');
+    expect(titles).not.toContain('Lesson Hub');
+  });
+
+  test('on a phone the tour uses the bottom bar and the More button', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoScenario(page, 'student-semester');
+    await startTour(page);
+    const titles = await walkTour(page);
+    expect(titles).toContain('More');
+    expect(titles.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+test.describe('onboarding', () => {
+  test('the last step shows where things are, and unticking the tour skips it', async ({ page }) => {
+    await gotoScenario(page, 'student-semester');
+    await page.evaluate(() => (window as any).showOnboarding(6));
+    const step = page.locator('#ob-step-6');
+    await expect(step).toBeVisible();
+    // It used to ask which tools to "connect": G Suite, Notion, Slack…
+    await expect(step).not.toContainText(/Google connects|Notion|Slack|AI profile/);
+    await expect(step.locator('.ob-ready-row:visible')).toHaveCount(5);
+    await page.evaluate(() => localStorage.removeItem('flux_tour_completed'));
+    await page.locator('#obWantTour').uncheck();
+    await page.locator('#obFinishBtn').click();
+    await expect(page.locator('#app')).toHaveClass(/visible/);
+    await page.waitForTimeout(2000);
+    await expect(page.locator('.ftour')).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('flux_tour_completed'))).toBe('true');
+  });
+
+  test('"what you will use first" offers tabs that exist', async ({ page }) => {
+    await gotoScenario(page, 'student-semester');
+    await page.evaluate(() => (window as any).showOnboarding(2));
+    const chips = page.locator('#obFeatureChips .ob-chip');
+    await expect(chips).not.toContainText(['Flux AI']);
+    const feats = await chips.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.feat));
+    expect(feats).not.toContain('ai');
+    expect(feats).not.toContain('notes');
+    expect(feats).toContain('toolbox');
+  });
+});
+
+test.describe('login page', () => {
+  test('names nothing the planner cannot do', async ({ page }) => {
+    await page.goto('/');
+    const login = page.locator('#loginScreen');
+    await expect(login).toBeVisible({ timeout: 15000 });
+    const text = (await login.innerText()).replace(/\s+/g, ' ');
+    for (const gone of ['Flux AI tutor', 'Flux AI Tutor', 'ask Flux AI', 'AI flashcards', 'Tagged notes', 'iCal feeds',
+      'Vision import', 'Vision Import', 'AI actions', 'app integrations', 'Gradebook', 'Notion', 'Obsidian']) {
+      expect(text, `login page still advertises "${gone}"`).not.toContain(gone);
+    }
+    await expect(login).toContainText('16');
+    await expect(login).toContainText('study subjects');
+  });
+
+  // The students / teachers tab and its rotating demo line left the sign-in
+  // screen in November 2026: it shows just the name and the sign-in card,
+  // and the scroll story below tells the rest.
+});
+
+test.describe('staff workspace', () => {
+  test('every Workspace row has an icon, and the counselor has no duplicate Calendar', async ({ page }) => {
+    await gotoScenario(page, 'counselor-path');
+    const rows = page.locator('#sidebar [data-role-group="staff"] .nav-item:visible');
+    const n = await rows.count();
+    expect(n).toBeGreaterThan(2);
+    for (let i = 0; i < n; i++) {
+      await expect(rows.nth(i).locator('.ni svg'), `row ${i} has no icon`).toHaveCount(1);
+    }
+    const calendars = page.locator('#sidebar .nav-item:visible', { hasText: /^Calendar$/ });
+    await expect(calendars).toHaveCount(1);
+    await expect(page.locator('#modeDesc')).toHaveText('Counselor tools');
+  });
+
+  test('staff pages keep the same gutter as the rest of the planner', async ({ page }) => {
+    await gotoScenario(page, 'teacher-workflow');
+    for (const tab of ['lessonHub', 'teacherResources', 'staffMessages']) {
+      await page.evaluate((t) => (window as any).nav(t), tab);
+      await page.waitForTimeout(700);
+      const gap = await page.evaluate((t) => {
+        const p = document.getElementById(t)!;
+        const h = p.querySelector('.flux-page-header') as HTMLElement;
+        return h.getBoundingClientRect().left - p.getBoundingClientRect().left;
+      }, tab);
+      expect(gap, `${tab} content is flush against the sidebar`).toBeGreaterThanOrEqual(20);
+    }
+    await expect(page.locator('#topbarTitle')).toHaveText('Messages');
+  });
+
+  test('the group maker splits a class into even groups and keeps them', async ({ page }) => {
+    await gotoScenario(page, 'teacher-workflow');
+    const names = ['Ana', 'Ben', 'Cal', 'Dee', 'Eli', 'Fay', 'Gus', 'Hal', 'Ivy', 'Jo'];
+    await page.evaluate((list) => (window as any).FluxTeacherClasses.setStudents(92001, list), names);
+    await page.evaluate(() => (window as any).nav('teacherDashboard'));
+    const cell = page.locator('.flux-widget-cell[data-widget-id="classroom_group_maker"]');
+    await expect(cell).toBeVisible();
+    await cell.locator('#fluxGroupClass').selectOption('92001');
+    await cell.locator('[data-gm-mode="size"]').click();
+    await cell.locator('#fluxGroupMake').click();
+    const groups = cell.locator('.flux-gm-group');
+    // 10 names in groups of at most 3: four groups, sizes 3,3,2,2.
+    await expect(groups).toHaveCount(4);
+    const sizes = await groups.evaluateAll((els) => els.map((e) => e.querySelectorAll('.flux-gm-names span').length));
+    expect(sizes.reduce((a, b) => a + b, 0)).toBe(10);
+    expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1);
+    // Redrawing the dashboard keeps the split instead of reshuffling the room.
+    const read = () => page.locator('.flux-widget-cell[data-widget-id="classroom_group_maker"] .flux-gm-group')
+      .evaluateAll((els) => els.map((e) => [...e.querySelectorAll('.flux-gm-names span')].map((s) => s.textContent).join(',')));
+    const before = await read();
+    await page.evaluate(() => (window as any).nav('lessonHub'));
+    await page.evaluate(() => (window as any).nav('teacherDashboard'));
+    await expect(page.locator('.flux-widget-cell[data-widget-id="classroom_group_maker"] .flux-gm-group')).toHaveCount(4);
+    expect(await read()).toEqual(before);
+  });
+
+  test('quick-grade cards move on with a tap and can be removed', async ({ page }) => {
+    await gotoScenario(page, 'teacher-workflow');
+    await page.evaluate(() => {
+      const w = window as any;
+      w.FluxMagic = w.FluxMagic || {};
+      w.FluxMagic.prompt = async () => 'Ch 4 quiz';
+    });
+    const qg = page.locator('.flux-widget-cell[data-widget-id="classroom_quick_grade"]');
+    await expect(qg).toBeVisible();
+    await qg.locator('.flux-qg-add').click();
+    const toGrade = qg.locator('.flux-qg-col[data-col="To grade"]');
+    await expect(toGrade.locator('.flux-qg-card')).toHaveCount(1);
+    await expect(toGrade.locator('.flux-qg-count')).toHaveText('1');
+    await toGrade.locator('[data-qg-next]').click();
+    await expect(qg.locator('.flux-qg-col[data-col="Graded"] .flux-qg-card')).toContainText('Ch 4 quiz');
+    await expect(qg.locator('.flux-qg-col[data-col="To grade"] .flux-qg-card')).toHaveCount(0);
+    await qg.locator('.flux-qg-col[data-col="Graded"] [data-qg-del]').click();
+    await expect(qg.locator('.flux-qg-card')).toHaveCount(0);
+  });
+
+  test('names saved in the student picker reach the group maker straight away', async ({ page }) => {
+    await gotoScenario(page, 'teacher-workflow');
+    await expect(page.locator('#fluxPickerEdit')).toBeVisible();
+    await page.locator('#fluxPickerEdit').click();
+    await page.locator('#fluxPickerNames').fill('Ava\nBen\nCara\nDev');
+    await page.locator('#fluxPickerSave').click();
+    await expect(page.locator('#fluxPickerSpin')).toBeEnabled();
+    const groups = page.locator('.flux-widget-cell[data-widget-id="classroom_group_maker"]');
+    await expect(groups).not.toContainText('No names for this class yet');
+  });
+
+  test('teacher resources narrow as you type and by subject', async ({ page }) => {
+    await gotoScenario(page, 'teacher-workflow');
+    await page.evaluate(() => (window as any).nav('teacherResources'));
+    const panel = page.locator('#teacherResources');
+    await expect(panel.locator('.ftr-card').first()).toBeVisible();
+    const all = await panel.locator('.ftr-card:visible').count();
+    await panel.locator('#ftrQ').fill('phet');
+    await expect(panel.locator('.ftr-card:visible')).toHaveCount(1);
+    await expect(panel.locator('.ftr-card:visible')).toContainText('PhET');
+    await panel.locator('#ftrQ').fill('');
+    await panel.locator('.ftr-chip', { hasText: 'Mathematics' }).click();
+    const maths = await panel.locator('.ftr-card:visible').count();
+    expect(maths).toBeGreaterThan(0);
+    expect(maths).toBeLessThan(all);
+    await expect(panel.locator('.ftr-group:visible')).toHaveCount(1);
+  });
+
+  /* "Rosters jumps to the class rosters" lived here. Rosters is hidden while
+     class joining is off; the teacher-workflow spec checks it stays hidden. */
+});
+
+test.describe('staff workspace, round two', () => {
+  test('Work hub buttons open their pages in Work mode instead of bouncing home', async ({ page }) => {
+    await gotoScenario(page, 'teacher-workflow');
+    const cases: Array<[string, string]> = [['pd', 'staffPD'], ['wellbeing', 'staffWellbeing'], ['tasks', 'staffTasks']];
+    for (const [act, panel] of cases) {
+      await page.evaluate(() => (window as any).nav('staffHub'));
+      await page.locator(`[data-spdx-act="${act}"]`).click();
+      await expect(page.locator(`#${panel}.panel.active`), `${act} did not open ${panel}`).toBeVisible();
+      // Log PD also opens its form, a moment after the page.
+      if (act === 'pd') {
+        await expect(page.locator('#pdModalRoot')).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(page.locator('#pdModalRoot')).toHaveCount(0);
+      }
+    }
+    await page.evaluate(() => (window as any).nav('staffHub'));
+    await page.locator('.spd-card[data-spd-nav="staffMeetingNotes"]').click();
+    await expect(page.locator('#staffMeetingNotes.panel.active')).toBeVisible();
+    // Canvas cannot open for a teacher in Work mode, so the hub no longer offers it.
+    await page.evaluate(() => (window as any).nav('staffHub'));
+    await expect(page.locator('[data-spdx-act="canvas"]')).toHaveCount(0);
+  });
+
+  test('Escape closes the staff pop-ups', async ({ page }) => {
+    await gotoScenario(page, 'teacher-workflow');
+    await page.evaluate(() => (window as any).nav('staffHub'));
+    await page.locator('[data-spdx-act="meeting"]').click();
+    await expect(page.locator('#mnModalRoot')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#mnModalRoot')).toHaveCount(0);
+    await page.evaluate(() => (window as any).nav('teacherDashboard'));
+    await page.locator('.flux-widget-grid__configure').first().click();
+    await expect(page.locator('#fluxWidgetConfigureModal')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#fluxWidgetConfigureModal')).toHaveCount(0);
+  });
+
+  test('Personal mode: the dashboard tip stays on the dashboard, and no school banner', async ({ page }) => {
+    await gotoScenario(page, 'teacher-workflow');
+    await page.evaluate(() => (window as any).FluxRole.setMode('personal'));
+    await page.evaluate(() => (window as any).nav('dashboard'));
+    await expect(page.locator('#dashboard .fsdb-hint-inline')).toBeVisible();
+    await expect(page.locator('#fsdbHintModal')).toHaveCount(0);
+    await expect(page.locator('#fluxImportSeasonBanner')).toHaveCount(0);
+    await page.evaluate(() => (window as any).nav('staffTasks'));
+    await expect(page.locator('#stAddBtn')).toBeVisible();
+    // Nothing from the dashboard is left sitting over the Tasks page.
+    const hit = await page.evaluate(() => {
+      const b = document.getElementById('stAddBtn');
+      if (!b) return 'no button';
+      const r = b.getBoundingClientRect();
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return top === b || b.contains(top) ? 'ok' : (top && (top.id || top.className)) || 'nothing';
+    });
+    expect(hit).toBe('ok');
+    const label = page.locator('#sidebar .nav-group', { has: page.locator('[data-tab="staffTasks"]') }).locator('.nav-group-label');
+    await expect(label).toHaveText('Personal');
+  });
+
+  test('the counselor Meetings page shows what is coming up and meeting notes', async ({ page }) => {
+    await gotoScenario(page, 'counselor-path');
+    await page.evaluate(() => (window as any).nav('counselorMeetings'));
+    const body = page.locator('#counselorMeetingsBody');
+    await expect(body.locator('.cm-sec h3', { hasText: 'Coming up' })).toBeVisible();
+    await expect(body.locator('.cm-sec h3', { hasText: 'Meeting notes' })).toBeVisible();
+    await expect(body).not.toContainText('Google Calendar is paused');
+    await body.locator('#cmNewNote').click();
+    await expect(page.locator('#staffMeetingNotes.panel.active')).toBeVisible();
+    await expect(page.locator('#mnModalRoot')).toBeVisible();
+  });
+});

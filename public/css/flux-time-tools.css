@@ -1,0 +1,670 @@
+/* ============================================================================
+   FLUX TIME TOOLS  ·  flux-time-tools.css
+   Clock / stopwatch / countdown / alarms on the Timer tab.
+
+   Every colour here is a theme variable, never a literal. The light-mode sweep
+   found 24 unreadable spots across the app and almost all of them were
+   hardcoded values that looked right on the near-black default and had nothing
+   behind them on white. New surfaces do not get to repeat that.
+   ========================================================================== */
+
+.ftt-nav {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.ftt-card {
+  text-align: center;
+  padding: 24px 16px;
+}
+
+/* ── displays ─────────────────────────────────────────────────────────────── */
+.ftt-clock,
+.ftt-big {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.05;
+  /* Tabular figures stop the whole display shuffling sideways every time a 1
+     replaces a 0 — very visible at four repaints a second. */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+.ftt-clock { font-size: clamp(2.4rem, 11vw, 3.6rem); letter-spacing: -1px; }
+.ftt-big { font-size: clamp(2.6rem, 12vw, 4rem); letter-spacing: -1.5px; margin-bottom: 14px; }
+.ftt-big--idle { color: var(--muted2); }
+
+.ftt-sub {
+  font-size: .82rem;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+/* ── the customisable face ────────────────────────────────────────────────
+   Everything the student can change is a custom property, written by
+   applyClockStyle() onto whichever element hosts the clock. The same seven
+   properties drive this card, the full-screen overlay and clock.html, so the
+   preview on the Timer tab is the real thing rather than an impression of it.
+
+   Each var carries its own fallback here rather than being given a default in
+   JS, because the right fallback differs by surface: a card with no chosen
+   background must stay transparent so the card shows through, while the
+   overlay must fall back to the page background or it would be see-through. */
+.ftt-face {
+  border-radius: 16px;
+  padding: 10px 8px;
+  background: var(--fttc-bg, transparent);
+  transition: background .25s ease;
+  /* Makes cqw below mean "per cent of this card", which is what the digits
+     actually have to fit inside — the viewport is much wider than the card. */
+  container-type: inline-size;
+}
+.ftt-face .ftt-clock {
+  font-family: var(--fttc-font, 'JetBrains Mono', monospace);
+  font-weight: var(--fttc-weight, 700);
+  /* A multiplier, not a size. The same 100% has to mean "right for this card"
+     and "right for a monitor across the room", so the control scales whatever
+     each surface already chose instead of naming pixels.
+
+     Capped at 13cqw because the time must not wrap — "11:08:52 AM" is eleven
+     characters, and eleven characters at 13% of the card each comes to about
+     86% of it, so the longest string still fits with room to spare. Without
+     the cap, 220% ran the digits straight off the side of the card. The cap
+     is in container units rather than vw so it holds on a phone as well: at
+     100% the base size is the smaller of the two, so nothing shrinks. */
+  font-size: min(calc(clamp(2.4rem, 11vw, 3.6rem) * var(--fttc-scale, 1)), 13cqw);
+  letter-spacing: var(--fttc-track, -1px);
+  color: var(--fttc-ink, var(--text));
+  white-space: nowrap;
+}
+.ftt-face .ftt-face-date { color: var(--fttc-ink, var(--muted)); opacity: .72; margin-bottom: 0; }
+.ftt-face-label {
+  margin-top: 6px;
+  font-size: .82rem;
+  letter-spacing: .04em;
+  color: var(--fttc-ink, var(--muted));
+  opacity: .78;
+}
+[data-clock-glow="1"] .ftt-clock,
+[data-clock-glow="1"] .ftt-fs-time { text-shadow: 0 0 .38em var(--fttc-ink, var(--text)); }
+
+/* ── appearance controls ──────────────────────────────────────────────────── */
+.ftt-custom { margin-top: 18px; text-align: left; }
+.ftt-custom-sum {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card2);
+  color: var(--text);
+  font-size: .78rem;
+  font-weight: 600;
+  /* 44px minimum thumb target, same as everything else in the planner. */
+  min-height: 44px;
+  box-sizing: border-box;
+}
+.ftt-custom-sum::-webkit-details-marker { display: none; }
+.ftt-custom-sum::after { content: '▾'; color: var(--muted); transition: transform .2s ease; }
+.ftt-custom[open] .ftt-custom-sum::after { transform: rotate(180deg); }
+.ftt-custom-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.ftt-field { display: flex; flex-direction: column; gap: 8px; }
+.ftt-field-lbl {
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted);
+  font-weight: 700;
+}
+.ftt-field-lbl b { color: var(--accent); font-variant-numeric: tabular-nums; }
+.ftt-field--range { gap: 4px; }
+
+.ftt-swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ftt-sw {
+  padding: 7px 13px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: var(--card2);
+  color: var(--muted);
+  font-size: .74rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1;
+}
+.ftt-sw:hover { color: var(--text); border-color: var(--accent); }
+.ftt-sw.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent,#fff); }
+/* The colour and background swatches show the value itself; a name for
+   "linear-gradient(160deg,#0f2027,#203a43,#2c5364)" tells you nothing. */
+.ftt-chip {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1px solid rgba(255, 255, 255, .35);
+}
+.ftt-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .72rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+/* [type=color] is one of the types flux-form-controls.css exempts from its
+   full-width rule, so it is safe to size here. */
+.ftt-pick input[type='color'] {
+  width: 34px;
+  height: 30px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+.ftt-field--range input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.ftt-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
+.ftt-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px 7px 11px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: var(--card2);
+  color: var(--muted);
+  font-size: .74rem;
+  font-weight: 600;
+  cursor: pointer;
+  line-height: 1;
+}
+.ftt-toggle-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--border2, var(--border));
+  flex: 0 0 auto;
+  transition: background .15s ease;
+}
+.ftt-toggle:hover { color: var(--text); border-color: var(--accent); }
+.ftt-toggle.active { color: var(--text); border-color: var(--accent); }
+.ftt-toggle.active .ftt-toggle-dot { background: var(--accent); }
+
+.ftt-hint--tight { margin: 2px 0 0; line-height: 1.5; }
+/* flux-form-controls.css loads 95 files later and pins every text input to
+   width:100% at (1,1,1), which .ftt-input alone cannot reach. Two classes
+   behind an id outranks it — see the same trick in flux-study-hub.css. */
+#app .ftt-custom .ftt-input--wide {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+/* ── rows and controls ────────────────────────────────────────────────────── */
+.ftt-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.ftt-row--center { justify-content: center; }
+.ftt-row:last-child { margin-bottom: 0; }
+
+.ftt-lbl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .7rem;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.ftt-num {
+  width: 58px;
+  padding: 6px 8px;
+  margin: 0;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+}
+.ftt-input {
+  padding: 7px 10px;
+  margin: 0;
+  max-width: 240px;
+  width: auto;
+}
+.ftt-input--time { font-family: 'JetBrains Mono', monospace; }
+
+.ftt-mini {
+  padding: 5px 10px !important;
+  font-size: .7rem !important;
+}
+
+.ftt-hint {
+  font-size: .68rem;
+  color: var(--muted);
+  margin: -4px 0 12px;
+}
+
+.ftt-empty {
+  color: var(--muted);
+  font-size: .84rem;
+  padding: 14px 0 4px;
+}
+
+/* Small round dismiss control. Deliberately not .reveal-btn — that one is
+   positioned absolutely, and the motion layer's .flux-ripple-host makes it
+   land in unpredictable places inside a flex row. */
+.ftt-x {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.ftt-x:hover { color: var(--red); border-color: var(--red); }
+
+/* ── world clocks ─────────────────────────────────────────────────────────── */
+.ftt-zones {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 16px 0;
+}
+.ftt-zone {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  text-align: left;
+}
+.ftt-zone-city {
+  flex: 1 1 auto;
+  font-size: .78rem;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ftt-zone-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .84rem;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  /* "4:51 AM" was wrapping after the colon in a narrow cell, which made the row
+     two lines tall and stole enough width from the city that London rendered as
+     "Lon…". The time is short and must never break. */
+  white-space: nowrap;
+}
+
+/* ── countdown progress ───────────────────────────────────────────────────── */
+.ftt-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin: 0 auto 16px;
+  max-width: 320px;
+}
+.ftt-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  /* Only as long as one tick, or the bar visibly lags the digits. */
+  transition: width .25s linear;
+}
+
+/* ── stopwatch laps ───────────────────────────────────────────────────────── */
+.ftt-laps {
+  margin-top: 16px;
+  max-height: 240px;
+  overflow-y: auto;
+  text-align: left;
+}
+.ftt-lap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .76rem;
+  font-variant-numeric: tabular-nums;
+}
+.ftt-lap:last-child { border-bottom: 0; }
+.ftt-lap-n { flex: 1 1 auto; color: var(--muted); }
+.ftt-lap-split { color: var(--accent); }
+.ftt-lap-total { color: var(--text); min-width: 76px; text-align: right; }
+
+/* ── alarms ───────────────────────────────────────────────────────────────── */
+.ftt-days { gap: 4px !important; }
+.ftt-day {
+  cursor: pointer;
+  user-select: none;
+}
+.ftt-day input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.ftt-day span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--card2);
+  color: var(--muted);
+  font-size: .74rem;
+  font-weight: 700;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.ftt-day input:checked + span {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent,#fff);
+}
+/* Keyboard users need to see focus — the real checkbox is visually hidden. */
+.ftt-day input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ftt-alarms { margin-top: 16px; text-align: left; }
+.ftt-alarm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card2);
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.ftt-alarm.is-off { opacity: .55; }
+.ftt-alarm-main { flex: 1 1 140px; min-width: 0; }
+.ftt-alarm-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.28rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ftt-alarm-meta {
+  font-size: .7rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── full-screen focus ────────────────────────────────────────────────────── */
+/* Works whether or not the Fullscreen API was granted. iOS Safari refuses
+   requestFullscreen on ordinary elements and any browser may decline, so the
+   overlay covers the viewport on its own merits — the API only removes the
+   browser chrome as a bonus. */
+.ftt-fs {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  /* Opaque, not translucent. The point is to take the planner out of view, and
+     a see-through backdrop leaves your task list legible behind the clock. */
+  background: var(--bg);
+  padding: max(20px, env(safe-area-inset-top, 0px)) 20px max(20px, env(safe-area-inset-bottom, 0px));
+}
+.ftt-fs[hidden] { display: none; }
+/* Nothing behind the overlay should scroll while it is up. */
+body.ftt-fs-on { overflow: hidden; }
+
+.ftt-fs-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  text-align: center;
+  width: 100%;
+  max-width: 560px;
+}
+.ftt-fs-lbl {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .8rem;
+  text-transform: uppercase;
+  letter-spacing: .18em;
+  color: var(--muted);
+}
+.ftt-fs-ringwrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  /* Scales off the smaller viewport edge so it fits a short laptop window as
+     well as a tall phone, without ever outgrowing the screen. */
+  width: min(58vh, 78vw, 420px);
+  aspect-ratio: 1 / 1;
+}
+/* The clock and the stopwatch get no ring — there is no total to count
+   against, and a ring that never moves is just a circle. They still need a
+   positioned box, because .ftt-fs-time is absolutely placed inside its wrap. */
+.ftt-fs-plainwrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: min(84vw, 720px);
+  min-height: clamp(4.5rem, 22vh, 9rem);
+}
+.ftt-fs-ring { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ftt-fs-ring-bg { fill: none; stroke: var(--border2, var(--border)); stroke-width: 6; }
+.ftt-fs-ring-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 6;
+  stroke-linecap: round;
+  transition: stroke-dashoffset .3s linear;
+}
+/* The Pomodoro ring is written once a second, so easing between values looks
+   smooth. The countdown ring is now written every frame, and a .3s ease
+   chasing a value that moves every 16ms lags visibly behind the digits. */
+.ftt-fs[data-mode="countdown"] .ftt-fs-ring-fill { transition: none; }
+.ftt-fs-time {
+  position: absolute;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(3rem, 15vh, 6rem);
+  font-weight: 700;
+  letter-spacing: -2px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+.ftt-fs-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .78rem;
+  color: var(--muted);
+}
+.ftt-fs-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.ftt-fs-actions button { padding: 11px 26px; }
+.ftt-fs-hint { font-size: .68rem; color: var(--muted2); }
+.ftt-fs-launch { margin-top: -4px; }
+
+/* ── Idle: everything but the time fades out ──────────────────────────────
+   Set three seconds after the last pointer, key or touch event, and cleared
+   by any of them. The time itself is deliberately excluded — it is the one
+   thing you opened full screen to look at.
+
+   Fading rather than hiding, so nothing reflows. display:none on the label
+   and the buttons would let the clock jump to a new vertical position every
+   time the controls came and went, which is far more distracting than the
+   controls ever were. The layout stays put and only the ink changes.
+
+   pointer-events go with the opacity, so a control you cannot see cannot be
+   clicked by accident on the way to moving the mouse. */
+.ftt-fs-lbl,
+.ftt-fs-sub,
+.ftt-fs-actions,
+.ftt-fs-hint,
+.ftt-fs-ring {
+  transition: opacity .55s ease;
+}
+.ftt-fs.is-idle .ftt-fs-lbl,
+.ftt-fs.is-idle .ftt-fs-sub,
+.ftt-fs.is-idle .ftt-fs-actions,
+.ftt-fs.is-idle .ftt-fs-hint,
+.ftt-fs.is-idle .ftt-fs-zones,
+.ftt-fs.is-idle .ftt-fs-ring {
+  opacity: 0;
+  pointer-events: none;
+}
+/* The cursor is part of "everything", and it is the one a video player never
+   forgets to hide. */
+.ftt-fs.is-idle { cursor: none; }
+
+/* ── screensaver: keep the information, drop only the controls ────────────
+   The opposite choice from the rule above, and the reason both exist: fading
+   everything is right for a focus timer you glance at, and wrong for a clock
+   left on a second monitor, where the date is half the point. Only the two
+   things that are controls rather than information come back out — the
+   buttons and the "press Esc" hint. */
+.ftt-fs.ftt-keepinfo.is-idle .ftt-fs-lbl,
+.ftt-fs.ftt-keepinfo.is-idle .ftt-fs-sub,
+.ftt-fs.ftt-keepinfo.is-idle .ftt-fs-zones {
+  opacity: 1;
+}
+
+/* ── clock: the student's own styling ─────────────────────────────────────── */
+.ftt-fs[data-mode="clock"] { background: var(--fttc-bg, var(--bg)); }
+.ftt-fs[data-mode="clock"] .ftt-fs-time {
+  font-family: var(--fttc-font, 'JetBrains Mono', monospace);
+  font-weight: var(--fttc-weight, 700);
+  /* Height drives the size — a clock should fill the screen it is given — but
+     never past 11vw, or a long string like "11:08:52 AM" at 220% runs off both
+     sides. Eleven characters at 11% of the width each is about 73% of the
+     screen, so the cap only bites when it needs to. */
+  font-size: min(calc(clamp(3rem, 15vh, 6rem) * var(--fttc-scale, 1)), 11vw);
+  letter-spacing: var(--fttc-track, -2px);
+  color: var(--fttc-ink, var(--text));
+  white-space: nowrap;
+}
+/* Dimmed with colour, not opacity, and that distinction is load-bearing: this
+   rule and `.ftt-fs.is-idle .ftt-fs-sub { opacity: 0 }` have identical
+   specificity, so an `opacity: .72` here would win on source order and the
+   date could never fade to nothing. Opacity belongs to the idle fade; how
+   quiet the date looks the rest of the time is a colour decision. */
+.ftt-fs[data-mode="clock"] .ftt-fs-lbl,
+.ftt-fs[data-mode="clock"] .ftt-fs-sub {
+  color: color-mix(in srgb, var(--fttc-ink, var(--muted)) 72%, transparent);
+}
+/* The wrap is sized for a fixed 6rem display; a 220% clock would overflow it
+   and be clipped, so it grows with the same multiplier. */
+.ftt-fs[data-mode="clock"] .ftt-fs-plainwrap {
+  min-height: calc(clamp(4.5rem, 22vh, 9rem) * var(--fttc-scale, 1));
+  width: min(94vw, calc(720px * var(--fttc-scale, 1)));
+}
+.ftt-fs-zones {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px 22px;
+  transition: opacity .55s ease;
+}
+.ftt-fs-zone {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--fttc-font, 'JetBrains Mono', monospace);
+  font-size: .82rem;
+  color: var(--fttc-ink, var(--muted));
+  opacity: .66;
+}
+.ftt-fs-zone b { font-variant-numeric: tabular-nums; font-weight: 700; }
+
+/* ── gentle drift ─────────────────────────────────────────────────────────
+   A clock left up all night sits on the same pixels for eight hours, which is
+   how OLED panels acquire a permanent ghost of it. Two minutes per lap and a
+   few percent of travel is enough to spread the load and slow enough that it
+   reads as still. Only while idle: it would be distracting while you are
+   actually using the thing, and it is off unless asked for. */
+@keyframes fttDrift {
+  0%   { transform: translate(0, 0); }
+  25%  { transform: translate(2.5%, -2%); }
+  50%  { transform: translate(0, -3.5%); }
+  75%  { transform: translate(-2.5%, -1%); }
+  100% { transform: translate(0, 0); }
+}
+.ftt-fs.is-idle[data-clock-drift="1"] .ftt-fs-inner {
+  animation: fttDrift 120s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ftt-fs-lbl,
+  .ftt-fs-sub,
+  .ftt-fs-actions,
+  .ftt-fs-hint,
+  .ftt-fs-zones,
+  .ftt-fs-ring { transition: none; }
+  .ftt-fs.is-idle[data-clock-drift="1"] .ftt-fs-inner { animation: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ftt-fs-ring-fill { transition: none; }
+}
+
+/* ── mobile ───────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .ftt-card { padding: 20px 12px; }
+  /* Five tabs will not fit across a phone; let them scroll rather than wrap
+     onto a second row that pushes the clock down the screen. */
+  .ftt-nav {
+    gap: 4px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .ftt-nav::-webkit-scrollbar { height: 0; display: none; }
+  .ftt-nav .tmode-btn { flex: 0 0 auto; }
+  /* One per row on a phone. Two columns on a 341px screen left each card about
+     144px to hold a city, a time and a delete button; the city was clipped to
+     "Lon…". Full width costs a little vertical space and stays readable. */
+  .ftt-zones { grid-template-columns: 1fr; }
+  .ftt-alarm-time { font-size: 1.1rem; }
+}

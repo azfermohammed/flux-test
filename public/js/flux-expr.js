@@ -1,0 +1,338 @@
+/* ============================================================================
+   FLUX EXPR  ·  flux-expr.js
+   A small, safe expression evaluator: "2x^2 - sin(x)/3" → a function of x.
+
+   WHY A SHARED FILE RATHER THAN A THIRD COPY
+   ------------------------------------------
+   Two parsers already exist — compileExpr in flux-toolbox.js and compile in
+   flux-study-math.js — but neither is reachable from grapher.html, which
+   deliberately loads no bundles so it works on its own. The tempting move is
+   to tuck a private copy inside the grapher; that would be a third
+   implementation of the same grammar in one repo, and the copy nobody looks at
+   is always the one that drifts.
+
+   So this is the shared one: standalone as a plain script in the grapher,
+   bundled in the planner. The other two should fold into it.
+
+   NO eval, NO Function()
+   ----------------------
+   A recursive-descent parser over a whitelist. Students paste expressions from
+   anywhere, and a graphing box that reaches eval() is a graphing box that runs
+   whatever a classmate sent them.
+   ========================================================================== */
+(function () {
+  'use strict';
+
+  var CONSTS = { pi: Math.PI, 'π': Math.PI, e: Math.E, tau: Math.PI * 2 };
+
+  /* Whitelisted only. Anything absent is a syntax error rather than a property
+     lookup that might reach somewhere interesting. */
+  var FNS = {
+    sin: Math.sin, cos: Math.cos, tan: Math.tan,
+    asin: Math.asin, acos: Math.acos, atan: Math.atan,
+    sinh: Math.sinh, cosh: Math.cosh, tanh: Math.tanh,
+    ln: Math.log, log: function (v) { return Math.log(v) / Math.LN10; },
+    log2: function (v) { return Math.log(v) / Math.LN2; },
+    sqrt: Math.sqrt, cbrt: Math.cbrt, abs: Math.abs,
+    exp: Math.exp, sign: Math.sign,
+    floor: Math.floor, ceil: Math.ceil, round: Math.round,
+    min: Math.min, max: Math.max, atan2: Math.atan2, pow: Math.pow,
+  };
+
+  /**
+   * Compile to a function of one variable. Throws on bad input with a message
+   * worth showing — "Missing a closing bracket" beats a silently absent curve.
+   *
+   * opts.params: let unknown letters stand for adjustable numbers, the way
+   *   "a·sin(bx)" works in Desmos — each becomes a slider. Off by default, so a
+   *   typo in any other caller is still an error rather than a silent 1.
+   *   Every letter of an unknown name counts separately: "ax" is a·x.
+   * opts.scope: where those numbers are read from, at call time, so dragging
+   *   a slider does not need a recompile.
+   * opts.names: an object whose keys are whole words to read from the scope
+   *   (a table's column names). A name not in the scope reads as NaN.
+   * opts.fns: functions defined by the person, by name — f, g, speed — so
+   *   "f(x) = x^2" in one row makes f(x − 1) and f'(x) work in another.
+   *
+   * The returned function also carries .usesVar: whether the variable
+   * appears at all. "2 + 3" is a sum to show, not a line to draw.
+   *
+   * The returned function carries .params — the letters it used, in order.
+   *
+   * opts.var2 / opts.var2Ref: a second variable, read from var2Ref.v at call
+   *   time — y in x² + y² = 25, which the grapher draws as the points where
+   *   the two sides agree. Reported as .usesVar2. Without it, y stays an
+   *   error ("y is what is being drawn").
+   */
+  function compile(src, varName, opts) {
+    var v = (varName || 'x').toLowerCase();
+    /* Spaces are kept as separators rather than deleted. Deleting them made
+       "a sin(x)" into "asin(x)" — the arcsine — which drew a short stub
+       between −1 and 1 instead of a sine wave with a slider. */
+    var S = String(src == null ? '' : src).replace(/\s+/g, ' ').trim();
+    var i = 0;
+    var o = opts || {};
+    var found = [];
+    var usedVar = false;
+    var v2 = o.var2 ? String(o.var2).toLowerCase() : '';
+    var usedVar2 = false;
+    function Y() { return o.var2Ref ? o.var2Ref.v : NaN; }
+
+    function fail(msg) { throw new Error(msg); }
+    function ws() { while (S[i] === ' ') i++; }
+    function eat(ch) { ws(); if (S[i] === ch) { i++; return true; } return false; }
+
+    /* Implicit multiplication — "2x", "3(x+1)", "2sin(x)" all read naturally
+       to a student and would be syntax errors without it. */
+    function canImplicitMult() {
+      ws();
+      if (i >= S.length) return false;
+      var c = S[i];
+      return c === '(' || /[a-zπ]/i.test(c) || /[0-9.]/.test(c);
+    }
+
+    function parseExpr() {
+      var left = parseTerm();
+      for (;;) {
+        if (eat('+')) left = add(left, parseTerm());
+        else if (eat('-')) left = sub(left, parseTerm());
+        else return left;
+      }
+    }
+    function parseTerm() {
+      var left = parseUnary();
+      for (;;) {
+        if (eat('*')) left = mul(left, parseUnary());
+        else if (eat('/')) left = div(left, parseUnary());
+        else if (eat('%')) left = mod(left, parseUnary());
+        else if (canImplicitMult() && !/[+\-*/^%),]/.test(S[i])) left = mul(left, parseUnary());
+        else return left;
+      }
+    }
+    function parseUnary() {
+      if (eat('-')) { var n = parseUnary(); return function (x) { return -n(x); }; }
+      if (eat('+')) return parseUnary();
+      return parsePower();
+    }
+    function parsePower() {
+      var base = parseAtom();
+      // Right-associative: 2^3^2 is 2^(3^2), the way it is written on paper.
+      if (eat('^')) { var ex = parseUnary(); return function (x) { return Math.pow(base(x), ex(x)); }; }
+      return base;
+    }
+    function parseAtom() {
+      if (eat('(')) {
+        var inner = parseExpr();
+        if (!eat(')')) fail('Missing a closing bracket.');
+        return inner;
+      }
+      ws();
+      var numMatch = /^[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?/.exec(S.slice(i));
+      if (numMatch) {
+        i += numMatch[0].length;
+        var val = parseFloat(numMatch[0]);
+        return function () { return val; };
+      }
+      var nameMatch = /^[a-zA-Zπα-ωΑ-Ω][a-zA-Z0-9α-ωΑ-Ω_]*/.exec(S.slice(i));
+      if (nameMatch) {
+        var name = nameMatch[0];
+        var start = i;
+        i += name.length;
+        var lower = name.toLowerCase();
+        var afterName = i;
+        /* opts.names: whole words that read from the scope — a table's column
+           names in a calculated column ("L / T^2"). Checked before anything
+           else so a column called "e" or "a" means the column, exactly as
+           the person who named it expects. */
+        if (o.names && Object.prototype.hasOwnProperty.call(o.names, name)) {
+          if (found.indexOf(name) < 0) found.push(name);
+          return function () {
+            var sc = o.scope;
+            var n = sc && sc[name];
+            return typeof n === 'number' ? n : NaN;
+          };
+        }
+        ws();
+        /* A function the person defined: f(x), and its derivatives f'(x),
+           f''(x), taken numerically so any definition has one. Checked
+           before the built-ins are, but a built-in name cannot be defined in
+           the first place — the grapher refuses "sin(x) = …". */
+        if (o.fns && Object.prototype.hasOwnProperty.call(o.fns, name)) {
+          var primes = 0;
+          while (S[i] === "'" || S[i] === '′') { primes++; i++; }
+          ws();
+          if (S[i] !== '(') fail('Use ' + name + ' with brackets, like ' + name + '(x).');
+          i++;
+          var uarg = parseExpr();
+          if (!eat(')')) fail('Missing a closing bracket after ' + name + '(.');
+          var uf = o.fns[name];
+          if (!primes) return function (x) { return uf(uarg(x)); };
+          return function (x) { return derivative(uf, uarg(x), primes); };
+        }
+        if (S[i] === '(' && Object.prototype.hasOwnProperty.call(FNS, lower)) {
+          i++;
+          var args = [parseExpr()];
+          while (eat(',')) args.push(parseExpr());
+          if (!eat(')')) fail('Missing a closing bracket after ' + name + '(.');
+          var fn = FNS[lower];
+          return function (x) {
+            var vals = [];
+            for (var k = 0; k < args.length; k++) vals.push(args[k](x));
+            return fn.apply(null, vals);
+          };
+        }
+        /* Not a function call. "x(x+1)" and "a(x−2)" are a value next to a
+           bracket, which the implicit multiplication in parseTerm picks up —
+           they used to fail as 'I do not know the function "x"'. */
+        i = afterName;
+        var val = nameValue(name, start);
+        if (val) return val;
+        ws();
+        if (S[i] === '(') fail('I do not know the function "' + name + '".');
+        fail('I do not know "' + name + '".');
+      }
+      if (i >= S.length) fail('The expression stops early.');
+      fail('Unexpected "' + S[i] + '".');
+    }
+
+    function constFn(c) { return function () { return c; }; }
+    function X(x) { return x; }
+
+    /** A bare name as a value: the variable, a constant, or slider letters. */
+    function nameValue(name, start) {
+      var lower = name.toLowerCase();
+      if (lower === v) { usedVar = true; return X; }
+      if (v2 && lower === v2) { usedVar2 = true; return Y; }
+      if (Object.prototype.hasOwnProperty.call(CONSTS, lower)) return constFn(CONSTS[lower]);
+      if (Object.prototype.hasOwnProperty.call(CONSTS, name)) return constFn(CONSTS[name]);
+      if (Object.prototype.hasOwnProperty.call(FNS, lower)) {
+        fail('Put brackets after ' + name + ' — like ' + name + '(x).');
+      }
+      /* "sinx" would otherwise split into s·i·n·x and quietly grow three
+         sliders. Nobody typing that meant it, so say what they did mean. */
+      for (var fname in FNS) {
+        if (Object.prototype.hasOwnProperty.call(FNS, fname) && fname.length > 1
+          && lower.indexOf(fname) === 0) {
+          fail('Write ' + fname + '(…) with brackets, like ' + fname + '(x).');
+        }
+      }
+      if (!o.params || !/^[a-zA-Zα-ωΑ-Ω]+$/.test(name)) return null;
+      /* Take one letter and hand the rest back to the parser. Returning the
+         whole run as one product would make "ax^2" mean (a·x)², when everyone
+         reads it as a·x² — the power belongs to the last letter only. The
+         implicit multiplication in parseTerm picks the remaining letters up
+         one at a time, so each gets its own exponent. */
+      if (lower.indexOf('pi') === 0) {             // "2pix" is 2·π·x, not p·i·x
+        i = start + 2;
+        return constFn(Math.PI);
+      }
+      i = start + 1;
+      var ch = name[0];
+      if (ch.toLowerCase() === v) { usedVar = true; return X; }
+      if (v2 && ch.toLowerCase() === v2) { usedVar2 = true; return Y; }
+      // "2πx" is 2·π·x. π used to fall through to param() and become a slider worth 1.
+      if (Object.prototype.hasOwnProperty.call(CONSTS, ch)) return constFn(CONSTS[ch]);
+      if (ch === 'y') fail('y is what is being drawn, so it cannot appear on the right.');
+      return param(ch);
+    }
+
+    function param(ch) {
+      if (found.indexOf(ch) < 0) found.push(ch);
+      return function () {
+        var sc = o.scope;
+        var n = sc && sc[ch];
+        return typeof n === 'number' && Number.isFinite(n) ? n : 1;
+      };
+    }
+
+    function add(a, b) { return function (x) { return a(x) + b(x); }; }
+    function sub(a, b) { return function (x) { return a(x) - b(x); }; }
+    function mul(a, b) { return function (x) { return a(x) * b(x); }; }
+    function div(a, b) { return function (x) { return a(x) / b(x); }; }
+    function mod(a, b) { return function (x) { return a(x) % b(x); }; }
+
+    if (!S) fail('Nothing to plot yet.');
+    var f = parseExpr();
+    ws();
+    if (i < S.length) fail('I got stuck at "' + S.slice(i, i + 8) + '".');
+    var wrapped = function (x) { return f(x); };
+    wrapped.params = found.slice();
+    wrapped.usesVar = usedVar;
+    wrapped.usesVar2 = usedVar2;
+    return wrapped;
+  }
+
+  /** f'(v), f''(v)…: central differences, step scaled to the size of v. */
+  function derivative(f, v, order) {
+    if (!Number.isFinite(v)) return NaN;
+    if (order === 1) {
+      var h = 1e-5 * Math.max(1, Math.abs(v));
+      return (f(v + h) - f(v - h)) / (2 * h);
+    }
+    if (order === 2) {
+      var k = 1e-4 * Math.max(1, Math.abs(v));
+      return (f(v + k) - 2 * f(v) + f(v - k)) / (k * k);
+    }
+    // Higher orders: differentiate the derivative.
+    return derivative(function (u) { return derivative(f, u, order - 1); }, v, 1);
+  }
+
+  /* ── Reading maths the way students type it ──────────────────────────
+     compile() is strict on purpose: it is also what reads a table's column
+     names, where "ln" or "xy" may be a name. tidy() is the forgiving front
+     door for anything a person typed or pasted as maths — the grapher's rows
+     and Pixel's figures both go through it, so they read the same things. */
+
+  var BARE_FNS = ['sinh', 'cosh', 'tanh', 'asin', 'acos', 'atan', 'sqrt', 'cbrt', 'sin', 'cos', 'tan', 'exp', 'abs', 'log', 'ln'];
+  /* A function name with no bracket after it, and the short term it applies
+     to: "sin 2x", "ln x", "sqrt x", "cos^2 x", "sin x1". */
+  var BARE_RE = new RegExp('(^|[^A-Za-z])(' + BARE_FNS.join('|') + ')(\\^\\s*\\d+)?(?!\\s*\\()\\s*'
+    + '(-?(?:\\d+\\.?\\d*|\\.\\d+)?\\s*(?:pi|π|[a-z]\\d*)?(?:\\s*\\^\\s*(?:\\d+\\.?\\d*|[a-z]))?)', 'gi');
+
+  /** |x − 1| into abs(x − 1). A bar opens after an operator, a bracket or another opening bar; otherwise it closes. */
+  function absBars(s) {
+    if (s.indexOf('|') < 0) return s;
+    var out = '', depth = 0, last = '', lastOpen = false;
+    for (var i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (c === '|') {
+        if (depth === 0 || lastOpen || last === '' || /[(+\-*/^=<>,≤≥{]/.test(last)) { out += 'abs('; depth++; lastOpen = true; last = '('; }
+        else { out += ')'; depth--; lastOpen = false; last = ')'; }
+        continue;
+      }
+      out += c;
+      if (c !== ' ') { last = c; lastOpen = false; }
+    }
+    return out;
+  }
+
+  /**
+   * What a student types, into what compile() reads: a real minus, × and ÷,
+   * ² and ³, √, |x|, ½, =< for ≤, and the brackets people leave off
+   * (sin x, ln 2x, cos^2 x). Text that is already plain comes back as it was.
+   */
+  function tidy(src) {
+    var s = String(src == null ? '' : src)
+      .replace(/[−–—]/g, '-').replace(/[×·⋅∙]/g, '*').replace(/÷/g, '/')
+      .replace(/²/g, '^2').replace(/³/g, '^3').replace(/½/g, '(1/2)')
+      .replace(/=</g, '<=').replace(/=>/g, '>=')
+      .replace(/\barc(sin|cos|tan)\b/gi, 'a$1')
+      .replace(/√\s*\(/g, 'sqrt(').replace(/√\s*(\d*\.?\d*\s*[a-z]?)/gi, 'sqrt($1)')
+      .replace(/(^|[^a-z])([xy]{2,})(?![a-z0-9])/gi, function (all, pre, w) { return pre + w.split('').join('*'); });   // 2xy is 2·x·y
+    s = absBars(s);
+    return s.replace(BARE_RE, function (all, pre, name, pow, term) {
+      if (!term || !term.trim()) return all;
+      return pre + name + '(' + term.trim() + ')' + (pow ? pow.replace(/\s+/g, '') : '');
+    });
+  }
+
+  /** Compile without throwing: { fn, params } or { error }. */
+  function tryCompile(src, varName, opts) {
+    try {
+      var fn = compile(src, varName, opts);
+      return { fn: fn, params: fn.params, usesVar: fn.usesVar, usesVar2: fn.usesVar2 };
+    } catch (e) { return { error: e && e.message ? e.message : 'That expression did not parse.' }; }
+  }
+
+  window.FluxExpr = { compile: compile, tryCompile: tryCompile, tidy: tidy, FNS: FNS, CONSTS: CONSTS };
+})();

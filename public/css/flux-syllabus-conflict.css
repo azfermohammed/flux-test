@@ -1,0 +1,33 @@
+/* P11-SYLLABUS-CONFLICT — dashboard notice (reuses notices sub-bar) */
+.exam-conflict-banner.syllabus-conflict-banner--v2 {
+  display: block;
+  padding: 10px 14px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  border-radius: 10px;
+  background: rgba(245, 166, 35, 0.12);
+  border: 1px solid rgba(245, 166, 35, 0.35);
+  color: var(--text2, #e8ecff);
+}
+.syllabus-conflict-list {
+  margin: 6px 0 0;
+  padding-left: 1.15rem;
+}
+.syllabus-conflict-list li {
+  margin: 4px 0;
+}
+.cal-day--conflict {
+  box-shadow: inset 0 0 0 2px rgba(245, 166, 35, 0.55);
+}
+.cal-day-conflict-hint {
+  font-size: 0.78rem;
+  color: var(--gold, #f5a623);
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(245, 166, 35, 0.08);
+  border: 1px solid rgba(245, 166, 35, 0.25);
+}
+.cal-day-conflict-hint .syllabus-conflict-list {
+  margin-top: 6px;
+}

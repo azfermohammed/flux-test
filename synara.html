@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en" data-host="flux">
+<head>
+<meta charset="utf-8">
+<script src="public/js/flux-look.js?v=8679906f"></script>
+<meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'; form-action 'self'">
+<script src="public/js/flux-app-visibility.js?v=8ab1ae57" data-app="synara"></script>
+<script defer src="public/js/flux-site-notices.js?v=ba87f165"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Synara — epilepsy care for students</title>
+<meta name="description" content="Medication reminders, a seizure log that finds patterns, and an emergency safety card a teacher can follow — for students with epilepsy. It stays on this device unless you turn on sync through your Flux account. No account needed.">
+<meta name="theme-color" content="#f6f5fa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121019" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Synara">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Project Synara">
+<meta property="og:title" content="Synara — epilepsy care for students">
+<meta property="og:url" content="https://azfermohammed.github.io/flux-test/synara.html">
+<!-- Link previews (iMessage, Discord…) use the Project Synara logo, not the app icon. -->
+<meta property="og:image" content="https://azfermohammed.github.io/flux-test/public/partners/synara-logo.jpg">
+<meta property="og:image:width" content="3840">
+<meta property="og:image:height" content="3840">
+<meta property="og:image:alt" content="Project Synara logo">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://azfermohammed.github.io/flux-test/public/partners/synara-logo.jpg">
+<link rel="icon" href="public/synara/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="public/synara/icons/icon-180.png">
+<!-- Synara's own manifest, so "Add to Home Screen" makes it an app: on
+     iPhone that is what lets it ask for notifications, and on Android a
+     long-press on the icon offers the emergency card (#/sos). -->
+<link rel="manifest" href="public/synara/manifest.webmanifest">
+
+<!--
+  Synara: medication, seizures and a school safety card for students with
+  epilepsy. Its own app with its own look — violet, the epilepsy awareness
+  colour, light or dark — so unlike the other standalone pages it does not
+  load flux-theme-carry.js. The source lives in the Synara repo and is
+  copied to public/synara/ by its `npm run flux`; `npm run build:web` here
+  bundles it into the two public/bundles/flux-synara.* files below.
+  Data stays in this browser (localStorage "synara.v2"), plus an encrypted
+  copy in the student's Flux account only if they turn on sync (sync.js).
+  The font comes from Google Fonts; You → Your data says so.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="public/css/flux-hub.css?v=6a462093">
+<link rel="stylesheet" href="public/bundles/flux-synara.b5a42aca.css">
+
+<script>
+  /* The saved light/dark choice, before first paint: a student who picked
+     dark mode must not get a white flash every time this opens. */
+  (function () {
+    try {
+      var saved = JSON.parse(localStorage.getItem('synara.v2') || '{}');
+      var theme = saved && saved.settings && saved.settings.theme;
+      if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) { /* storage blocked or corrupt: follow the system */ }
+  })();
+</script>
+<link rel="stylesheet" href="public/css/flux-look-flat.css?v=76f53731">
+</head>
+<body>
+
+<div class="app-shell">
+  <!-- Inside the shell, so it goes inert with the app while a sheet or the
+       emergency card is open. main.js moves focus rather than following the
+       href, which the router would read as a route. -->
+  <a class="skip-link" href="#screen" data-action="skip-to-content">Skip to content</a>
+  <nav class="tabbar" id="tabbar" aria-label="Main navigation"></nav>
+  <div class="shell-main">
+    <header class="appbar" id="appbar">
+      <!-- Flux's app switcher; Synara moves it into each new app bar. -->
+      <div data-flux-hub="synara"></div>
+    </header>
+    <!-- Shown only while a seizure timer runs (safety.js sets data-timer on
+         <html>): closing the emergency card never stops the clock. -->
+    <button class="timer-banner" type="button" data-action="open-emergency">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 1.5"/><path d="M10 2h4"/><path d="M12 2v3"/></svg>
+      Seizure timer still running — open it
+    </button>
+    <main class="screen" id="screen" tabindex="-1"></main>
+  </div>
+</div>
+
+<div class="welcome" id="welcome" role="dialog" aria-modal="true" aria-label="Welcome to Synara" hidden></div>
+<div class="backdrop" id="backdrop" hidden></div>
+<section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden></section>
+<div class="emergency" id="emergency" role="dialog" aria-modal="true" aria-label="Emergency seizure card" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="print-card" id="print-card" aria-hidden="true"></div>
+
+<noscript>
+  <div style="padding:24px;font-family:system-ui,sans-serif;line-height:1.6">
+    <h1>Synara needs JavaScript</h1>
+    <p>It keeps everything on this device, which it cannot do with JavaScript turned off.</p>
+  </div>
+</noscript>
+
+<!-- Plain script tags, not the planner's bundles: this page stands alone. -->
+<script src="public/js/flux-hub.js?v=bdbbb380"></script>
+<!-- Sync's link to the Flux sign-in (public/js/flux-synara-vault.mjs). Deferred
+     so it never holds up Synara's first screen; Synara's sync waits for it. -->
+<script defer src="public/bundles/flux-synara_vault.19b027f3.js"></script>
+<script src="public/bundles/flux-synara.94eae264.js"></script>
+<meta name="robots" content="noindex"><div style="position:fixed;z-index:2147483647;left:50%;bottom:0;transform:translateX(-50%);padding:2px 10px;border-radius:6px 6px 0 0;background:#f59e0b;color:#111;font:600 11px/1.6 system-ui,sans-serif;pointer-events:none">TEST SITE · tab-line-jump · bb52a16</div></body>
+</html>

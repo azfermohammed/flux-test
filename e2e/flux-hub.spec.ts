@@ -1,0 +1,100 @@
+import { test, expect } from '@playwright/test';
+import { gotoScenario } from './helpers';
+
+// GitHub Pages serves /suite.html as written; the test server (npx serve) drops
+// the .html, so accept both spellings of the same page.
+const HUB_URL = /\/suite(\.html)?$/;
+
+test.describe('Flux Suite link', () => {
+  test('the standalone grapher opens Flux Suite directly', async ({ page }) => {
+    await page.goto('/grapher.html');
+    const link = page.locator('.fxhub-btn:visible');
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute('href', 'suite.html');
+    await expect(link).toHaveAttribute('aria-label', 'Open Flux Suite');
+    await expect(page.locator('.fxhub-panel')).toHaveCount(0);
+
+    await link.click();
+    await expect(page).toHaveURL(HUB_URL);
+    await expect(page.locator('#apps .app')).toHaveCount(11);
+  });
+
+  test('the planner link opens Flux Suite on desktop', async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 950 });
+    await gotoScenario(page, 'student-semester');
+    await page.waitForTimeout(2200);
+
+    const link = page.locator('.fxhub-btn:visible');
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute('href', 'suite.html');
+    await link.click();
+    await expect(page).toHaveURL(HUB_URL);
+  });
+
+  test('the planner phone header also links directly to Flux Suite', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoScenario(page, 'student-semester');
+    await page.waitForTimeout(2200);
+
+    const link = page.locator('.fxhub-btn:visible');
+    await expect(link).toHaveCount(1);
+    await expect(link).toHaveAttribute('href', 'suite.html');
+    await link.click();
+    await expect(page).toHaveURL(HUB_URL);
+    await expect(page.locator('#apps a.app--grapher')).toBeVisible();
+  });
+
+  test('Flux Suite directory contains every product', async ({ page }) => {
+    await page.goto('/suite.html');
+    const paths = await page.locator('#apps .app').evaluateAll((apps) =>
+      apps.map((app) => app.getAttribute('href')));
+    expect(paths).toEqual(expect.arrayContaining([
+      'index.html', 'synara.html', 'teacher.html', 'grapher.html',
+      'periodic.html', 'composer.html', 'flashcards.html', 'translate.html', 'pixel.html',
+      'calculator.html',
+    ]));
+  });
+
+  test('old Flux Hub links still reach Flux Suite, on the same tab', async ({ page }) => {
+    await page.goto('/hub.html#partner');
+    await expect(page).toHaveURL(/\/suite(\.html)?#partner$/);
+    await expect(page).toHaveTitle(/Flux Suite/);
+    await expect(page.locator('#tab-partner')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  test('other apps wear the planner theme only when signed in', async ({ page }) => {
+    await page.goto('/suite.html');
+    const accent = () => page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+    await page.evaluate(() => {
+      localStorage.setItem('flux_theme', '"ember"');
+      localStorage.setItem('flux_accent', '"#f97316"');
+      localStorage.setItem('flux_accent_rgb', '"249,115,22"');
+    });
+    await page.goto('/calculator.html');
+    expect(await accent()).toBe('#00c2ff');
+
+    await page.evaluate(() => localStorage.setItem('sb-test-auth-token', '{"x":1}'));
+    await page.goto('/calculator.html');
+    expect(await accent()).toBe('#f97316');
+    await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(13, 8, 4)');
+  });
+});
+
+test('the planner\'s light theme carries to the other apps, with light controls', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('sb-lfigdijuqmbensebnevo-auth-token', '{"access_token":"x"}');
+    localStorage.setItem('flux_theme', 'light');
+  });
+  for (const f of ['grapher', 'composer', 'calculator', 'pixel']) {
+    await page.goto('/' + f + '.html');
+    const s = await page.evaluate(() => ({
+      theme: document.documentElement.getAttribute('data-theme'),
+      scheme: getComputedStyle(document.documentElement).colorScheme,
+      bg: getComputedStyle(document.body).backgroundColor,
+    }));
+    expect(s.theme, f).toBe('light');
+    expect(s.scheme, f).toBe('light');
+    expect(s.bg, f).toBe('rgb(246, 248, 250)');
+  }
+});

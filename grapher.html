@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="public/js/flux-look.js?v=8679906f"></script>
+<meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'; form-action 'self'">
+<script src="public/js/flux-app-visibility.js?v=8ab1ae57" data-app="grapher"></script>
+<script defer src="public/js/flux-site-notices.js?v=ba87f165"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Flux Grapher</title>
+<meta name="description" content="Free graphing from Flux: functions like Desmos, and lab data with uncertainty columns, error bars and a best-fit gradient with its uncertainty. No account needed.">
+<meta name="theme-color" content="#070b14">
+<!-- On a phone's home screen these pages run full-screen like the planner:
+     the page's own dark colour under the clock, not a white bar, and the
+     header padded down clear of the notch (env(safe-area-inset-*) below). -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" type="image/png" href="public/flux-planner-logo.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-title" content="Flux Grapher">
+
+<!--
+  The standalone grapher.
+
+  Deliberately NOT part of the planner app: no bundles and no supabase
+  library. Someone should be able to open this on a school computer, plot a
+  practical, take the image and leave — without an account and without paying
+  anyone. Signing in exists only for saving, and is a plain fetch in
+  flux-grapher-cloud.js.
+
+  Because it loads none of the app's CSS, the palette is defined here. The
+  grapher's own classes come from flux-grapher.css, shared with the version
+  inside the planner so both look the same.
+-->
+<link rel="stylesheet" href="public/css/flux-tex.css?v=b68bf637">
+<link rel="stylesheet" href="public/css/flux-grapher.css?v=fe83419c">
+<link rel="stylesheet" href="public/css/flux-grapher-3d.css?v=8bc1f300">
+<link rel="stylesheet" href="public/css/flux-hub.css?v=6a462093">
+<link rel="stylesheet" href="public/css/flux-standalone-dark.css?v=806aa2b8">
+<style>
+  /* No page margin when printing, so the browser has nowhere to put its own
+     date, time and address; the print sheet pads itself instead. */
+  @page { margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+  /* A solid colour behind everything, so no edge of the screen can show white. */
+  html, body { background-color: #070b14; }
+  body {
+    background:
+      radial-gradient(120% 80% at 50% -10%, rgba(0,194,255,.10), transparent 55%),
+      radial-gradient(90% 70% at 100% 5%, rgba(124,92,255,.08), transparent 55%),
+      linear-gradient(170deg, #0a0f1c 0%, #070b14 55%, #05070f 100%);
+    color: var(--text);
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+  }
+
+  /* The graph gets the screen. The only chrome is one thin bar: the mark, the
+     switch between the two graphers, and a row of icons. The page itself
+     never scrolls — the rail scrolls inside the tool — so the plot cannot be
+     pushed off the bottom by a growing table. */
+  /* Pinned to the screen's edges rather than 100dvh tall: on an iPhone the two
+     disagree, and the difference showed as an empty strip along the bottom. */
+  .wrap { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+  header.top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+    height: calc(52px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) max(clamp(8px, 1.6vw, 14px), env(safe-area-inset-right, 0px)) 0 max(clamp(8px, 1.6vw, 14px), env(safe-area-inset-left, 0px));
+    border-bottom: 1px solid var(--border);
+    /* Solid, not frosted glass. iPhone Safari carries the colour of a bar at
+       the top up behind the clock; a see-through one it shows as a blur of
+       whatever is scrolling underneath. */
+    background: #080c16;
+    position: sticky; top: 0;
+    z-index: 5;
+  }
+  .brand { display: flex; align-items: center; flex: 0 0 auto; }
+  /* Just the mark — the one piece of branding that stays. */
+  .brand-mark { width: 30px; height: 30px; border-radius: 9px; display: block; }
+
+  .modes {
+    display: inline-flex; gap: 3px; padding: 3px;
+    background: rgba(10,14,24,.6); border: 1px solid var(--border);
+    border-radius: 11px;
+  }
+  [data-theme='light'] .modes { background: rgba(255,255,255,.7); }
+  .mode-btn {
+    appearance: none; border: 0; cursor: pointer;
+    font: inherit; font-size: .8rem; font-weight: 700; letter-spacing: -.01em;
+    padding: 7px 14px; border-radius: 9px;
+    color: var(--muted2); background: transparent;
+    transition: color .16s ease, background .16s ease;
+  }
+  .mode-btn:hover { color: var(--text); }
+  .mode-btn[aria-selected="true"] { color: #062030; background: linear-gradient(135deg, #7fe3ff, #00c2ff); }
+  /* Once flux-grapher.js adds the sliding highlight, it paints the chosen tab
+     and the buttons go clear so the colour can travel between them. */
+  .modes.has-glide { position: relative; }
+  .modes.has-glide .mode-btn { position: relative; z-index: 1; background: transparent; transition: color .28s ease; }
+  .modes .flg-glide { border-radius: 9px; }
+  .mode-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .grow { flex: 1; }
+  .acts { display: flex; align-items: center; gap: 2px; }
+  .hbtn {
+    position: relative;
+    display: grid; place-items: center;
+    width: 36px; height: 36px;
+    padding: 0; margin: 0;
+    border: 0; border-radius: 10px;
+    background: none;
+    color: var(--muted2);
+    cursor: pointer;
+    transition: color .15s ease, background .15s ease;
+  }
+  .hbtn:hover { color: var(--text); background: rgba(255,255,255,.06); }
+  .hbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* Unsaved work: a small dot on the save button, never a banner. */
+  .hbtn.is-dirty::after {
+    content: ''; position: absolute; top: 7px; right: 7px;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #fbbf24; box-shadow: 0 0 0 2px #0a0f1c;
+  }
+  .hbtn .qm { font-weight: 800; font-size: .95rem; }
+  .acct-av {
+    display: grid; place-items: center;
+    width: 26px; height: 26px; border-radius: 50%;
+    font-size: .74rem; font-weight: 800;
+    color: #04121c; background: linear-gradient(135deg, #7fe3ff, #a78bfa);
+  }
+  .sep { width: 1px; height: 22px; background: var(--border2); margin: 0 6px; }
+
+  /* Clear of a landscape iPhone's notch. The home bar at the bottom is left to
+     the list and the keypad, which pad themselves above it, so the tool's own
+     colour still runs to the bottom edge. All zero in a desktop browser. */
+  main#grapherHost {
+    flex: 1 1 auto; min-height: 0; position: relative;
+    margin: 0 env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
+  }
+  #grapherHost .flg-rail { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+  #grapherHost .flg-kb { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+  #grapherHost .flg.has-kb .flg-rail { padding-bottom: 10px; }
+  #grapherHost .flg.is-railless .flg-rail { padding: 0; }
+
+  .mode-btn .ms { display: none; }
+  @media (max-width: 560px) {
+    /* A phone cannot fit "Measurements" and the hub on one bar; the short
+       labels keep every control reachable instead of pushing the hub off. */
+    header.top { gap: 6px; }
+    .mode-btn { padding: 7px 10px; font-size: .76rem; }
+    .mode-btn .ml { display: none; }
+    .mode-btn .ms { display: inline; }
+    .hbtn { width: 32px; height: 32px; }
+    .sep, #ghHelp, #ghPng, .fxhub-btn-label { display: none; }
+    .fxhub-btn { padding: 7px 9px; }
+  }
+  .mode-btn { white-space: nowrap; }
+  /* Three tabs since the 3D mode: on a 390-wide phone everything still fits
+     on the one bar, a little closer together. */
+  @media (max-width: 420px) {
+    header.top { gap: 4px; }
+    .mode-btn { padding: 7px 6px; }
+    .hbtn { width: 30px; }
+    .fxhub-btn { padding: 7px 7px; }
+  }
+  @media (max-width: 340px) { .hbtn { width: 28px; } }
+  /* A zoomed-in iPhone is 320 wide: fewer icons, so the switcher never leaves the screen. */
+  @media (max-width: 380px) {
+    header.top { gap: 4px; }
+    #ghShare { display: none; }
+    .mode-btn { padding: 7px 6px; }
+  }
+  @media (max-width: 340px) { .brand { display: none; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+  }
+</style>
+<script src="public/js/flux-theme-carry.js?v=c2d84cfb"></script>
+<script src="public/js/flux-purple-day.js?v=1966eb3d"></script>
+<link rel="stylesheet" href="public/css/flux-look-flat.css?v=76f53731">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <!-- The mark does not navigate. Switching apps is the hub's job, and a
+           logo that means "leave" is the most likely thing to be clicked. -->
+      <span class="brand" title="Flux">
+        <img class="brand-mark" src="public/flux-planner-logo.png" alt="Flux" width="30" height="30">
+      </span>
+
+      <div class="modes" id="ghModes" role="tablist" aria-label="Which grapher">
+        <button type="button" class="mode-btn" id="modeFunctions" role="tab"
+          aria-selected="false" aria-controls="grapherHost"><span class="ml">Functions</span><span class="ms" aria-hidden="true">ƒ(x)</span></button>
+        <button type="button" class="mode-btn" id="modeData" role="tab"
+          aria-selected="true" aria-controls="grapherHost"><span class="ml">Measurements</span><span class="ms" aria-hidden="true">Data ±</span></button>
+        <button type="button" class="mode-btn" id="mode3d" role="tab"
+          aria-selected="false" aria-controls="grapherHost" aria-label="3D">3D</button>
+      </div>
+
+      <span class="grow"></span>
+
+      <div class="acts">
+        <button type="button" class="hbtn" id="ghSave" title="Save (Ctrl+S)" aria-label="Save to your Flux account">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.3 12 3.5 3.5 0 0 0 6.5 19z"/><path d="M12 12v6M9.5 14.5 12 12l2.5 2.5"/></svg>
+        </button>
+        <button type="button" class="hbtn" id="ghOpen" title="Your saved graphs" aria-label="Your saved graphs">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        </button>
+        <button type="button" class="hbtn" id="ghPng" title="Download as an image" aria-label="Download as an image">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
+        </button>
+        <button type="button" class="hbtn" id="ghPrint" title="Print" aria-label="Print the graph">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V2h12v7"/><rect x="6" y="14" width="12" height="8" rx="1"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/></svg>
+        </button>
+        <button type="button" class="hbtn" id="ghShare" title="Copy a link to the grapher" aria-label="Share the grapher">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+        </button>
+        <button type="button" class="hbtn" id="ghHelp" title="Tour" aria-label="Take the tour"><span class="qm" aria-hidden="true">?</span></button>
+        <span class="sep" aria-hidden="true"></span>
+        <button type="button" class="hbtn" id="ghAcct" title="Account" aria-label="Account">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+        </button>
+      </div>
+
+      <div data-flux-hub="grapher"></div>
+    </header>
+
+    <main id="grapherHost" aria-label="Graphing tool"></main>
+  </div>
+
+  <!-- Plain script tags, not the app bundles: this page has to stand alone. -->
+  <script src="public/js/flux-hub.js?v=bdbbb380"></script>
+  <script src="public/js/flux-expr.js?v=8f27a6da"></script>
+  <script src="public/js/flux-lab-fit.js?v=da22f751"></script>
+  <script src="public/js/flux-formula-typeset.js?v=4b6135e4"></script>
+  <script src="public/js/flux-mathfield.js?v=ddaf78a5"></script>
+  <script src="public/js/flux-grapher.js?v=475dd98a"></script>
+  <script src="public/js/flux-space3d.js?v=21ef9ce8"></script>
+  <script src="public/js/flux-grapher-3d.js?v=934f12ee"></script>
+  <script src="public/js/flux-grapher-cloud.js?v=3f32ffcb"></script>
+  <script src="public/js/flux-grapher-import.js?v=e69aafc4"></script>
+  <script src="public/js/flux-grapher-tour.js?v=1f80fcc9"></script>
+  <script>
+    (function () {
+      var host = document.getElementById('grapherHost');
+      var G = window.FluxGrapher, C = window.FluxGraphCloud, T = window.FluxGrapherTour;
+      if (!host) return;
+      if (!G) {
+        host.innerHTML = '<p style="padding:24px;color:#fbbf24">The graphing tool could not load. Try refreshing.</p>';
+        return;
+      }
+
+      var btnFn = document.getElementById('modeFunctions');
+      var btnData = document.getElementById('modeData');
+      var btn3d = document.getElementById('mode3d');
+      var BTN = { functions: btnFn, data: btnData, '3d': btn3d };
+      function modeOk(m) { return m === 'functions' || m === '3d' ? m : 'data'; }
+      var saveBtn = document.getElementById('ghSave');
+      var acctBtn = document.getElementById('ghAcct');
+      var inst = null;
+      /* Each half keeps its graph while you look at the other. Nothing here is
+         written to storage — switching away must not lose work, and closing
+         the tab without saving is allowed to. */
+      var stash = {};
+
+      function markDirty() { saveBtn.classList.toggle('is-dirty', !!(inst && inst.isDirty())); }
+
+      function show(mode) {
+        var prev = inst ? inst.kind : null;
+        if (inst) { stash[inst.kind] = inst.snapshot(); inst.destroy(); }
+        inst = G.create(host, { mode: mode, surface: 'standalone' });
+        if (stash[mode]) inst.restore(stash[mode]);
+        inst.on('change', markDirty);
+        inst.on('saved', markDirty);
+        Object.keys(BTN).forEach(function (k) { BTN[k].setAttribute('aria-selected', String(k === mode)); });
+        // The highlight slides to the chosen tab and the new grapher comes in
+        // from that side (Functions left, Measurements middle, 3D right).
+        if (G.glideSeg) G.glideSeg(document.getElementById('ghModes'), BTN[mode], !prev);
+        if (G.enterFrom) G.enterFrom(host.firstElementChild, mode, prev);
+        try { localStorage.setItem(G.MODE_KEY, mode); } catch (e) {}
+        // A 3D link in the address belongs to the 3D graph; leaving it lets it go.
+        if (mode !== '3d' && /^#3d=/.test(location.hash)) {
+          try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+        }
+        markDirty();
+      }
+
+      btnFn.addEventListener('click', function () { if (inst.kind !== 'functions') show('functions'); });
+      btnData.addEventListener('click', function () { if (inst.kind !== 'data') show('data'); });
+      btn3d.addEventListener('click', function () { if (inst.kind !== '3d') show('3d'); });
+
+      /* Opened from the planner's full-screen button: take its graph along.
+         Read once and removed, and ignored if it is stale. */
+      var hand = null;
+      try {
+        hand = JSON.parse(localStorage.getItem(G.HANDOFF_KEY) || 'null');
+        localStorage.removeItem(G.HANDOFF_KEY);
+      } catch (e) {}
+      if (hand && !(hand.at && Date.now() - hand.at < 10 * 60 * 1000)) hand = null;
+
+      /* A shared 3D graph: grapher.html#3d=… (or graph/#3d=…, which forwards
+         here) rebuilds the rows and the view. Nothing is stored. */
+      var linked = null;
+      var m3 = /^#3d=([A-Za-z0-9_-]+)$/.exec(location.hash || '');
+      if (m3 && window.FluxSpace3D) {
+        linked = window.FluxSpace3D.decodeShare(m3[1]);
+        if (!linked) setTimeout(function () { G.toast('That 3D link is damaged — it may have been cut short when it was copied.', 'warning'); }, 300);
+      }
+
+      /* Always opens on Measurements: reopening on whichever tab was used last
+         dropped students into 3D. A shared 3D link, or a graph carried over
+         from the planner, still opens on its own tab. */
+      show(linked ? '3d' : hand ? modeOk(hand.kind) : 'data');
+      if (linked) inst.loadDoc(linked, null);
+      else if (hand) inst.loadDoc(hand.payload, hand.cloud);
+
+      /* Deleted in the planner (or another tab) while it is open here: let go
+         of the saved id, so saving does not quietly bring it back. */
+      if (C && C.onDeleted) C.onDeleted(function (id, title) {
+        if (inst) inst.forgetCloud(id, title);
+        Object.keys(stash).forEach(function (k) { if (stash[k] && stash[k].cloud && stash[k].cloud.id === id) stash[k].cloud = null; });
+        markDirty();
+      });
+
+      function anyDirty() {
+        if (inst && inst.isDirty()) return true;
+        return Object.keys(stash).some(function (k) { return k !== inst.kind && stash[k] && stash[k].dirty; });
+      }
+
+      function save() {
+        if (!C) return;
+        C.save(inst).then(markDirty);
+      }
+      saveBtn.addEventListener('click', save);
+      document.getElementById('ghOpen').addEventListener('click', function () {
+        if (!C) return;
+        C.open(function (row) {
+          if (inst.isDirty() && !window.confirm('Open "' + row.title + '"? Unsaved changes to the graph on screen will be lost.')) return;
+          var kind = G.kindOf ? G.kindOf(row) : row.kind;
+          if (kind !== inst.kind) { delete stash[kind]; show(kind); }
+          inst.loadDoc(row.payload, { id: row.id, title: row.title });
+          markDirty();
+          G.toast('Opened "' + row.title + '".', 'success');
+        });
+      });
+      document.getElementById('ghPng').addEventListener('click', function () { inst.exportPNG(); });
+      document.getElementById('ghPrint').addEventListener('click', function () { inst.printMenu(this); });
+      /* The browser's own Print (Cmd/Ctrl+P) gets the same print-weight page,
+         in whichever ink was last chosen. */
+      window.addEventListener('beforeprint', function () {
+        if (document.documentElement.classList.contains('flg-printing') || !inst) return;
+        var mono = false;
+        try { mono = JSON.parse(localStorage.getItem('flux_grapher_print_mono') || 'false') === true; } catch (e) { /* private window */ }
+        inst.preparePrint(mono);
+        window.addEventListener('afterprint', function done() {
+          window.removeEventListener('afterprint', done);
+          document.documentElement.classList.remove('flg-printing');
+        });
+      });
+      document.getElementById('ghHelp').addEventListener('click', function () { if (T) T.start(); });
+
+      /* The short link, not this page's own address: /graph/ is the one
+         worth putting on a slide or in a class chat. */
+      document.getElementById('ghShare').addEventListener('click', function () {
+        var url = new URL('graph/', location.href.replace(/[^/]*([?#].*)?$/, '')).href;
+        // A 3D graph travels in the link itself: its rows, its box and the view.
+        if (inst && inst.kind === '3d' && inst.shareHash) url += inst.shareHash();
+        var is3d = /#3d=/.test(url);
+        var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+        if (coarse && navigator.share) {
+          navigator.share({ title: 'Flux Grapher', text: is3d ? 'A 3D graph — no account needed' : 'Free graphing — no account needed', url: url }).catch(function () {});
+          return;
+        }
+        var done = function () {
+          G.toast(is3d ? 'Link copied — it opens this 3D graph, turned the way it is now.' : 'Link copied — ' + url.replace(/^https?:\/\//, ''), 'success');
+        };
+        try {
+          navigator.clipboard.writeText(url).then(done, function () { window.prompt('Copy this link:', url); });
+        } catch (e) { window.prompt('Copy this link:', url); }
+      });
+      acctBtn.addEventListener('click', function () { if (C) C.accountMenu(acctBtn); });
+
+      document.addEventListener('keydown', function (e) {
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key && e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          save();
+        }
+      });
+
+      // The account button wears your initial once signed in.
+      var ACCT_ICON = acctBtn.innerHTML;
+      function paintAccount() {
+        if (!C) return;
+        C.session().then(function (s) {
+          if (!s) { acctBtn.innerHTML = ACCT_ICON; acctBtn.title = 'Sign in'; return; }
+          var name = C.displayName(s.user) || '?';
+          acctBtn.innerHTML = '<span class="acct-av">' + G.esc(name.charAt(0).toUpperCase()) + '</span>';
+          acctBtn.title = name;
+        });
+      }
+      if (C) C.onAccount(paintAccount);
+      paintAccount();
+
+      window.addEventListener('beforeunload', function (e) {
+        if (!anyDirty()) return;
+        e.preventDefault();
+        e.returnValue = '';
+      });
+
+      // First visit: offer the tour, once, and only after the tool has drawn.
+      if (T) setTimeout(T.offer, 900);
+
+      window.fluxGrapherPage = { get instance() { return inst; }, show: show };
+    })();
+  </script>
+<meta name="robots" content="noindex"><div style="position:fixed;z-index:2147483647;left:50%;bottom:0;transform:translateX(-50%);padding:2px 10px;border-radius:6px 6px 0 0;background:#f59e0b;color:#111;font:600 11px/1.6 system-ui,sans-serif;pointer-events:none">TEST SITE · tab-line-jump · bb52a16</div></body>
+</html>

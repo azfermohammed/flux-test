@@ -1,0 +1,259 @@
+/* Flux · Educator workspace hub (work-mode dashboards) */
+.staff-google-hub-mount {
+  margin: 0 16px 16px;
+  max-width: 960px;
+}
+.staff-google-hub {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--card2);
+}
+.staff-google-hub-title {
+  margin: 0 0 6px;
+  font-size: 1.08rem;
+  font-weight: 700;
+}
+.staff-google-hub-sub {
+  margin: 0 0 12px;
+  font-size: 0.93rem;
+  color: var(--muted2);
+  line-height: 1.45;
+}
+.staff-google-hub-sub--ok { color: var(--success, #34a853); }
+.staff-google-hub-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.staff-google-hub-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  cursor: pointer;
+  font-size: 0.97rem;
+  font-weight: 600;
+}
+.staff-google-hub-btn:hover { border-color: var(--accent); }
+
+/* Flux · Google + Canvas integrations hub */
+#canvas.panel.flux-page > .flux-page-header--lead {
+  text-align: center;
+  max-width: 760px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+  padding-left: 16px;
+  padding-right: 16px;
+  box-sizing: border-box;
+}
+#canvas.panel.flux-page > .flux-page-header--lead .flux-page-sub {
+  max-width: 56ch;
+  margin-left: auto;
+  margin-right: auto;
+}
+#canvas.panel.flux-page #canvasHubStack.flux-stack {
+  align-items: center;
+  padding-left: 16px;
+  padding-right: 16px;
+  box-sizing: border-box;
+}
+.g-hub {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+}
+.g-hub-status-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.g-hub-status { display: flex; flex-wrap: wrap; gap: 8px; }
+.g-hub-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.g-hub-account-btn {
+  font-size: 0.84rem;
+  padding: 7px 12px;
+}
+.g-hub-account-btn.login-google-btn--compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: none;
+  width: auto;
+}
+.g-hub-pill {
+  font-size: 0.78rem;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted2);
+  background: var(--card2);
+}
+.g-hub-pill--on {
+  border-color: rgba(var(--accent-rgb), 0.35);
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+.g-hub-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  width: 100%;
+}
+.g-hub-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1 1 0;
+  min-width: 72px;
+  max-width: 132px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted2);
+  font-size: 0.89rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.g-hub-tab span:last-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.g-hub-tab.active {
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent);
+}
+.g-hub-pane { min-height: 120px; width: 100%; }
+.g-hub-pane--pad { padding: 8px 0 16px; }
+.g-hub-import-lede { text-align: center; }
+.g-hub-status { justify-content: center; }
+.g-hub-gate {
+  text-align: center;
+  padding: 32px 20px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: linear-gradient(160deg, rgba(var(--accent-rgb), 0.06), transparent);
+}
+.g-hub-gate-icon { font-size: 2.74rem; margin-bottom: 12px; }
+.g-hub-gate-title { font-size: 1.31rem; font-weight: 800; margin: 0 0 10px; }
+.g-hub-gate-sub {
+  font-size: 0.93rem;
+  color: var(--muted2);
+  line-height: 1.65;
+  max-width: 420px;
+  margin: 0 auto 10px;
+}
+.g-hub-gate-sub--muted { font-size: 0.85rem; color: var(--muted); }
+.g-hub-gate-switch {
+  width: 100%;
+  max-width: 320px;
+  margin: 4px auto 0;
+  font-size: 0.87rem;
+}
+.g-hub-gate-btn {
+  width: 100%;
+  max-width: 320px;
+  margin: 16px auto 10px;
+  padding: 12px 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.g-hub-gate-guest { max-width: 320px; margin: 0 auto; }
+.g-hub-muted { font-size: 0.89rem; color: var(--muted2); line-height: 1.55; margin: 0; }
+.g-hub-import-lede { margin: 0 0 4px; }
+.g-hub-import-card {
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border2);
+  background: var(--card2);
+}
+.g-hub-gcal-events { max-height: 360px; overflow-y: auto; }
+.g-hub-loading { font-size: 0.91rem; color: var(--muted2); padding: 20px; font-family: 'JetBrains Mono', monospace; }
+.g-hub-err { color: var(--red); font-size: 0.91rem; margin-bottom: 10px; }
+.g-tasks-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border2);
+}
+.g-tasks-head > div:first-child { flex: 1; min-width: 200px; }
+.g-tasks-title { font-size: 1.2rem; font-weight: 800; margin: 0 0 8px; }
+.g-tasks-head .g-hub-muted { margin: 0; }
+.g-tasks-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.g-tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.g-tasks-list > .g-hub-muted {
+  text-align: center;
+  padding: 20px 12px;
+  margin: 0;
+}
+.g-task-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card2);
+}
+.g-task-main { flex: 1; min-width: 0; }
+.g-task-name { font-size: 0.97rem; font-weight: 600; }
+.g-task-due {
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+  margin-top: 2px;
+}
+.g-task-notes { font-size: 0.82rem; color: var(--muted2); margin-top: 4px; line-height: 1.4; }
+.g-task-add {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  font-size: 0.82rem;
+  border-radius: 8px;
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent);
+  cursor: pointer;
+}
+.g-task-add--done { opacity: 0.55; cursor: default; }
+.g-tasks-more { margin-top: 12px; font-size: 0.82rem; }
+
+/* ── Google integrations paused (see enable_google_integrations) ────────────
+   Hidden rather than deleted: flipping the flag restores every surface.
+   The Canvas tab is deliberately not listed here — Canvas stays. */
+body.flux-google-off #fluxGoogleIntegrationCard,
+body.flux-google-off #fluxGoogleDocsSettingsCard {
+  display: none !important;
+}

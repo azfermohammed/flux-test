@@ -1,0 +1,631 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Flux · Design 2026 — the finishing coat
+   ───────────────────────────────────────────────────────────────────────────
+   Loaded last. One visual language across every tab, matching Flux Grapher:
+   calm near-black surfaces, hairline borders, the accent as a gradient on
+   the few things you act on, and motion that answers a click instead of
+   decorating the page.
+
+   Rules of the file:
+   • Colours come from the theme tokens (--accent, --accent-rgb, --text,
+     --card, --border…), so every theme and custom accent carries through.
+   • Specificity is kept deliberately low with :where(#app) so a component's
+     own class rule still wins; only the base, class-less elements are
+     restyled wholesale.
+   • Anything that moves is switched off under prefers-reduced-motion and
+     the low-end mode.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --fx-r: 18px;
+  --fx-r-sm: 12px;
+  --fx-ease: cubic-bezier(.22, 1, .36, 1);
+  --fx-ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --fx-accent-2: color-mix(in oklab, var(--accent) 58%, #c084fc);
+  --fx-accent-grad: linear-gradient(135deg, var(--accent) 0%, var(--fx-accent-2) 100%);
+  --fx-hair: rgba(255, 255, 255, .075);
+  --fx-hair-2: rgba(255, 255, 255, .12);
+  --fx-lift: rgba(255, 255, 255, .045);
+  --fx-sheen: linear-gradient(180deg, rgba(255, 255, 255, .042), rgba(255, 255, 255, .012) 42%, rgba(255, 255, 255, 0));
+  --fx-card-shadow: 0 1px 0 rgba(255, 255, 255, .05) inset, 0 18px 42px -24px rgba(0, 0, 0, .75);
+  --fx-glow: 0 10px 28px -10px rgba(var(--accent-rgb), .6);
+}
+body[data-theme="light"] {
+  --fx-hair: rgba(15, 23, 42, .09);
+  --fx-hair-2: rgba(15, 23, 42, .15);
+  --fx-lift: rgba(15, 23, 42, .04);
+  --fx-sheen: linear-gradient(180deg, rgba(255, 255, 255, .9), rgba(255, 255, 255, .6));
+  --fx-card-shadow: 0 1px 0 rgba(255, 255, 255, .9) inset, 0 14px 34px -22px rgba(15, 23, 42, .35);
+  --fx-glow: 0 10px 24px -10px rgba(var(--accent-rgb), .45);
+}
+
+/* ── Atmosphere ───────────────────────────────────────────────────────────
+   Two soft washes of the accent behind everything, and the animated mesh
+   turned down so its lines stop cutting through cards. */
+body:not([data-theme="light"]) #app {
+  background:
+    radial-gradient(1100px 620px at 88% -12%, rgba(var(--accent-rgb), .09), transparent 62%),
+    radial-gradient(900px 560px at 8% 112%, color-mix(in oklab, var(--fx-accent-2) 22%, transparent), transparent 64%);
+}
+#fluxMeshCanvas { opacity: .32 !important; }
+body[data-theme="light"] #fluxMeshCanvas { opacity: .5 !important; }
+/* The drifting lines at the foot of each tab showed through the cards
+   above them; they stay, but as a faint texture. */
+#app .panel .flux-dash-scroll-paths,
+#app .flux-page .flux-dash-scroll-paths { opacity: .2; }
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+#sidebar .nav-item {
+  transition: background-color .22s var(--fx-ease), color .22s var(--fx-ease), box-shadow .22s var(--fx-ease);
+}
+#sidebar .nav-item:not(.active):hover {
+  background: var(--fx-lift);
+  color: var(--text);
+}
+#sidebar .nav-item.active {
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), .2), rgba(var(--accent-rgb), .05) 70%, transparent);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent), inset 0 0 0 1px rgba(var(--accent-rgb), .16);
+}
+#sidebar .nav-item.active svg,
+#sidebar .nav-item.active .nav-ico { color: var(--accent); }
+/* Settings was dimmed to 65% to look "secondary"; it read as disabled. */
+.nav-item[data-tab="settings"] { opacity: .88; }
+
+/* ── Cards ───────────────────────────────────────────────────────────────── */
+:where(#app) .card {
+  border-radius: var(--fx-r);
+  border: 1px solid var(--fx-hair);
+  background: var(--fx-sheen), color-mix(in oklab, var(--card, #161b22) 82%, transparent);
+  box-shadow: var(--fx-card-shadow);
+  transition: border-color .3s var(--fx-ease), box-shadow .3s var(--fx-ease);
+}
+:where(#app) .card:hover { border-color: color-mix(in oklab, rgba(var(--accent-rgb), .5) 40%, var(--fx-hair)); }
+body[data-theme="light"] :where(#app) .card { background: var(--fx-sheen), var(--card, #fff); }
+
+/* Card titles: sentence case and solid, instead of all-caps with a light
+   sweep running through them forever. The words are already written in
+   the case they should be read in. */
+#app .card h3,
+#app .card .fluxw-hd h3 {
+  text-transform: none;
+  font-size: 1.02rem;
+  font-weight: 750;
+  letter-spacing: -.012em;
+  color: var(--text);
+}
+#app .card h3.flux-shimmer-text,
+#app .panel h3.flux-shimmer-text,
+#app .panel .shimmer-text:not(.dash-v2-greet-title) {
+  animation: none !important;
+  background: none !important;
+  -webkit-text-fill-color: currentColor !important;
+  color: var(--text) !important;
+}
+
+/* The small cards that sat alone in the middle of Calendar and Mood now
+   span the column like every other card. */
+.flux-wishlist-host,
+.flux-wishlist-host--cal { max-width: none; margin-left: 0; margin-right: 0; }
+
+/* ── Buttons ─────────────────────────────────────────────────────────────
+   Primary = a button with no styling class of its own (the app's default
+   action button). Only those get the gradient, so an icon button whose
+   class sets just a background-color never inherits a stray gradient. */
+:where(#app, .modal-overlay, .modal, [role="dialog"]) button:is(
+  :not([class]),
+  [class="flux-apple-press-target"],
+  [class="flux-ripple-host"],
+  [class="flux-apple-press-target flux-ripple-host"],
+  [class="flux-ripple-host flux-apple-press-target"],
+  .btn-primary
+):not([style*="background"]):not(:is(.flg, .flg-shell, .fgc-sheet, .fgt-card) *) {
+  background: var(--fx-accent-grad);
+  color: var(--on-accent,#fff);
+  border: 1px solid rgba(255, 255, 255, .1);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .22) inset, 0 6px 16px -8px rgba(var(--accent-rgb), .65);
+  font-weight: 650;
+  letter-spacing: -.005em;
+  transition: transform .18s var(--fx-ease), box-shadow .25s var(--fx-ease), filter .25s var(--fx-ease);
+}
+:where(#app, .modal-overlay, .modal, [role="dialog"]) button:is(
+  :not([class]),
+  [class="flux-apple-press-target"],
+  [class="flux-ripple-host"],
+  [class="flux-apple-press-target flux-ripple-host"],
+  [class="flux-ripple-host flux-apple-press-target"],
+  .btn-primary
+):not([style*="background"]):not(:is(.flg, .flg-shell, .fgc-sheet, .fgt-card) *):hover:not(:disabled) {
+  filter: brightness(1.08) saturate(1.05);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .26) inset, var(--fx-glow);
+}
+
+:where(#app, .modal-overlay, .modal, [role="dialog"]) .btn-sec {
+  transition: background-color .2s var(--fx-ease), border-color .2s var(--fx-ease), transform .18s var(--fx-ease);
+}
+/* html.flux-modern paints secondary buttons in 5% white — invisible on the
+   light theme, where "Count down to…" and the school presets read as plain
+   text. */
+body[data-theme="light"] .btn-sec {
+  background: rgba(15, 23, 42, .045);
+  border: 1px solid rgba(15, 23, 42, .14);
+  color: var(--text);
+}
+#app .btn-sec:hover:not(:disabled),
+.modal-overlay .btn-sec:hover:not(:disabled) {
+  background: rgba(var(--accent-rgb), .1);
+  border-color: rgba(var(--accent-rgb), .35);
+  box-shadow: none;
+}
+
+/* Canvas's call-to-action set near-black text on the accent gradient. */
+#app .cv-onb-cta { color: var(--on-accent,#fff); }
+
+/* Every button answers a press the same way. */
+#app button:active:not(:disabled),
+.modal-overlay button:active:not(:disabled) { transform: scale(.97); }
+
+/* The grapher styles its own buttons (it is the same component as the
+   standalone Flux Grapher), so the rule above leaves it alone. Its two tabs
+   take the planner's accent here so the chosen one reads like every other
+   selected pill in the planner. */
+#app .flg-shell--planner .flg-seg button[aria-selected='true'] {
+  background: var(--fx-accent-grad);
+  color: var(--on-accent,#fff);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .2) inset, 0 6px 16px -8px rgba(var(--accent-rgb), .7);
+}
+#app .flg-shell--planner .flg-seg button:not([aria-selected='true']):hover { color: var(--text); background: var(--fx-lift); }
+/* With the sliding highlight on (flux-grapher.js glideSeg), the accent paints
+   the highlight, not the button, so it can travel from tab to tab. */
+#app .flg-shell--planner .flg-seg.has-glide button[aria-selected='true'] { background: transparent; box-shadow: none; }
+#app .flg-shell--planner .flg-seg .flg-glide {
+  background: var(--fx-accent-grad);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .2) inset, 0 6px 16px -8px rgba(var(--accent-rgb), .7);
+}
+
+/* ── Segmented pills: Time modes, task filters, College Prep, Settings ──── */
+#app .tmode-btn,
+#app .stab {
+  transition: background-color .22s var(--fx-ease), color .22s var(--fx-ease), box-shadow .22s var(--fx-ease);
+}
+#app .tmode-btn.active,
+#app .stab.active,
+#app .flux-pill-item.tmode-btn.active {
+  background: var(--fx-accent-grad);
+  color: var(--on-accent,#fff);
+  border-color: transparent;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .2) inset, 0 6px 18px -8px rgba(var(--accent-rgb), .7);
+}
+/* Most pill rows light their choice with a sliding "morph pill" behind
+   the buttons; the Time modes and College Prep rows had a grey one. */
+html.flux-apple-motion #app :is(.ftt-nav, .flux-ec-stabs) .flux-morph-pill {
+  background: var(--fx-accent-grad) !important;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .2) inset, 0 6px 18px -8px rgba(var(--accent-rgb), .7) !important;
+}
+html.flux-apple-motion #app :is(.ftt-nav, .flux-ec-stabs) .flux-pill-item.active { color: var(--on-accent,#fff) !important; }
+html.flux-apple-motion #app .flux-settings-stabs .flux-morph-pill {
+  background: rgba(var(--accent-rgb), .16) !important;
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .3) !important;
+}
+html.flux-apple-motion #app .flux-settings-stabs .flux-pill-item.active { color: var(--text) !important; }
+html:not(.flux-apple-motion) #app .flux-ec-stabs .stab.active {
+  background: var(--fx-accent-grad) !important;
+  color: var(--on-accent,#fff) !important;
+}
+#app .tmode-btn:not(.active):hover,
+#app .stab:not(.active):hover { color: var(--text); background: var(--fx-lift); }
+
+/* ── Fields ──────────────────────────────────────────────────────────────── */
+#app :is(input[type=text], input[type=search], input[type=url], input[type=email], input[type=number],
+         input[type=date], input[type=time], input[type=datetime-local], input[type=password], select, textarea),
+.modal-overlay :is(input[type=text], input[type=search], input[type=number], input[type=date], input[type=time], select, textarea) {
+  /* background-color, not the shorthand: selects and date fields draw their
+     chevron and calendar icon as a background image. */
+  background-color: rgba(255, 255, 255, .035);
+  border: 1px solid var(--fx-hair-2);
+  border-radius: var(--fx-r-sm);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .03) inset;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: border-color .2s var(--fx-ease), box-shadow .2s var(--fx-ease), background-color .2s var(--fx-ease);
+}
+body[data-theme="light"] #app :is(input[type=text], input[type=search], input[type=number], input[type=date], input[type=time], select, textarea) {
+  background-color: rgba(255, 255, 255, .85);
+}
+#app :is(input, select, textarea):hover:not(:focus):not([type=range]):not([type=checkbox]):not([type=radio]):not([type=color]) {
+  border-color: color-mix(in oklab, rgba(var(--accent-rgb), .6) 35%, var(--fx-hair-2));
+}
+#app :is(input, select, textarea):focus:not([type=range]):not([type=checkbox]):not([type=radio]),
+.modal-overlay :is(input, select, textarea):focus:not([type=range]):not([type=checkbox]):not([type=radio]) {
+  border-color: rgba(var(--accent-rgb), .7);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .18);
+  background-color: rgba(var(--accent-rgb), .05);
+}
+
+/* "4 or B4" was cut to "4 or B": the box is 76px and the global input
+   rule forces 14px of padding each side with !important. */
+#app #classPeriod { width: 88px !important; padding-left: 10px !important; padding-right: 8px !important; }
+
+/* Native checkboxes, radios and sliders take the accent. */
+#app, .modal-overlay { accent-color: var(--accent); }
+
+/* Colour pickers: a round swatch instead of a grey box with a colour in it. */
+#app input[type=color],
+.modal-overlay input[type=color] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 36px !important;
+  min-width: 36px;
+  height: 36px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  border: 2px solid var(--fx-hair-2) !important;
+  background: none !important;
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, .15), 0 4px 12px -4px rgba(0, 0, 0, .5);
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform .2s var(--fx-ease-spring), border-color .2s var(--fx-ease);
+}
+#app input[type=color]:hover { transform: scale(1.08); border-color: rgba(var(--accent-rgb), .6) !important; }
+#app input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
+#app input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; }
+#app input[type=color]::-moz-color-swatch { border: none; border-radius: 50%; }
+
+/* The Pomodoro minutes: a 44px box with 14px padding each side left 14px
+   for "25", so the numbers were clipped to nothing. */
+#timer :is(#customWork, #customShort, #customLong) {
+  width: 62px !important;
+  padding: 8px 6px !important;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+/* ── Modals ──────────────────────────────────────────────────────────────── */
+.modal-overlay {
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+}
+.modal-overlay .modal-card,
+.modal-overlay > .modal {
+  border-radius: 22px;
+  border: 1px solid var(--fx-hair-2);
+  background: var(--fx-sheen), var(--card, #161b22);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .06) inset, 0 40px 90px -30px rgba(0, 0, 0, .8);
+}
+
+/* Study tools search boxes: the global input rule's 14px padding (with
+   !important) put the first letter under the magnifier. */
+#app .fsh-search input { padding-left: 36px !important; }
+
+/* ── Dashboard countdown tiles ─────────────────────────────────────────── */
+#app .dash-v2-countdown-grid > div {
+  background: linear-gradient(160deg, rgba(var(--accent-rgb), .09), rgba(255, 255, 255, .015) 60%);
+  border: 1px solid var(--fx-hair);
+  border-radius: 14px;
+  transition: border-color .25s var(--fx-ease), transform .25s var(--fx-ease);
+}
+#app .dash-v2-countdown-grid > div:hover { border-color: rgba(var(--accent-rgb), .3); transform: translateY(-1px); }
+
+/* Task rows pick up the accent under the pointer. */
+#app .task-item:hover { border-color: rgba(var(--accent-rgb), .28); }
+
+/* ── Countdown in the calendar ──────────────────────────────────────────
+   The day being counted down to wears a ring and a label on the month grid;
+   the selected day's panel and each pinned date can start or stop it. */
+#app .cal-day--countdown {
+  box-shadow: inset 0 0 0 2px rgba(var(--accent-rgb), .75), 0 0 18px -6px rgba(var(--accent-rgb), .8);
+  border-radius: 12px;
+}
+#app .cal-cd-badge {
+  position: absolute; left: 4px; right: 4px; bottom: 4px;
+  font-size: .6rem; font-weight: 800; letter-spacing: .01em;
+  color: var(--on-accent,#fff); text-align: center;
+  padding: 2px 4px; border-radius: 6px;
+  background: var(--fx-accent-grad);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+#app .cal-countdown-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 6px 12px; font-size: .8rem; font-weight: 700;
+  background: rgba(var(--accent-rgb), .1);
+  border: 1px solid rgba(var(--accent-rgb), .28);
+  color: var(--text);
+}
+#app .cal-countdown-btn.is-on { background: var(--fx-accent-grad); color: var(--on-accent,#fff); border-color: transparent; }
+#app .cal-cd-form { margin: 4px 0 12px; padding: 12px; border-radius: 12px; border: 1px solid var(--fx-hair-2); background: rgba(var(--accent-rgb), .06); }
+#app .cal-cd-label { display: block; font-size: .78rem; font-weight: 700; color: var(--muted2); margin-bottom: 8px; }
+#app .cal-cd-row { display: flex; gap: 8px; align-items: center; }
+#app .cal-cd-row input { flex: 1; margin: 0 !important; }
+#app .cal-cd-row button { flex: 0 0 auto; white-space: nowrap; }
+#app .cal-cd-msg { font-size: .74rem; color: var(--gold); margin-top: 6px; min-height: 0; }
+#app .cal-cd-msg:empty { display: none; }
+#app .fluxw-imp-cd {
+  display: inline-grid; place-items: center;
+  width: 28px; height: 28px; padding: 0; margin: 0 2px 0 auto;
+  border-radius: 8px; border: 1px solid transparent;
+  background: transparent; color: var(--muted2); cursor: pointer;
+  font-size: .85rem; transition: background-color .15s ease, color .15s ease;
+}
+#app .fluxw-imp-cd:hover { background: rgba(var(--accent-rgb), .12); color: var(--text); }
+#app .fluxw-imp-cd.is-on { background: var(--fx-accent-grad); color: var(--on-accent,#fff); }
+
+/* ── Countdown pill in the top bar ──────────────────────────────────────
+   Replaces the four-tile dashboard card, so the task list starts higher.
+   Colour carries the urgency: accent far off, gold within a week, red
+   within two days, a full accent fill on the day itself. */
+#countdownCard { display: none !important; }
+.topbar-cd {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 32px; padding: 0 13px 0 10px; margin: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), .38);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), .2), rgba(var(--accent-rgb), .06));
+  color: var(--text);
+  font-size: .8rem; font-weight: 650; letter-spacing: -.005em;
+  cursor: pointer; white-space: nowrap; max-width: 320px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .06) inset;
+  transition: border-color .2s var(--fx-ease), background-color .2s var(--fx-ease), transform .18s var(--fx-ease), box-shadow .25s var(--fx-ease);
+}
+.topbar-cd[hidden] { display: none; }
+.topbar-cd:hover { border-color: rgba(var(--accent-rgb), .7); box-shadow: 0 6px 18px -10px rgba(var(--accent-rgb), .8); transform: none; }
+.topbar-cd .tcd-ico { font-size: .9rem; line-height: 1; display: inline-grid; place-items: center; }
+.topbar-cd .tcd-ico svg { width: 15px; height: 15px; }
+.topbar-cd .tcd-name { overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+.topbar-cd .tcd-count { color: var(--muted2); font-weight: 600; }
+.topbar-cd .tcd-count b { color: var(--accent); font-weight: 800; font-variant-numeric: tabular-nums; font-size: .92rem; }
+.topbar-cd .tcd-short { display: none; font-weight: 800; font-variant-numeric: tabular-nums; }
+.topbar-cd.is-near { border-color: rgba(251, 191, 36, .5); background: linear-gradient(135deg, rgba(251, 191, 36, .16), rgba(251, 191, 36, .04)); }
+.topbar-cd.is-near .tcd-count b { color: var(--gold, #fbbf24); }
+.topbar-cd.is-soon { border-color: rgba(248, 81, 73, .55); background: linear-gradient(135deg, rgba(248, 81, 73, .18), rgba(248, 81, 73, .05)); }
+.topbar-cd.is-soon .tcd-count b { color: var(--red, #f85149); }
+.topbar-cd.is-today { border-color: transparent; background: var(--fx-accent-grad); color: var(--on-accent,#fff); }
+.topbar-cd.is-today .tcd-count { color: rgba(255, 255, 255, .9); }
+.topbar-cd.is-past { opacity: .75; }
+.topbar-cd.is-empty { color: var(--muted2); border-style: dashed; background: transparent; }
+@media (max-width: 768px) {
+  .topbar-cd { height: 36px; padding: 0 11px 0 9px; gap: 5px; }
+  .topbar-cd .tcd-name, .topbar-cd .tcd-count { display: none; }
+  .topbar-cd .tcd-short { display: inline; }
+  .topbar-cd.is-empty .tcd-short { display: none; }
+}
+
+.tcd-pop {
+  position: fixed; z-index: 9500;
+  padding: 16px 16px 14px;
+  border-radius: 18px;
+  border: 1px solid var(--fx-hair-2);
+  background: var(--fx-sheen), var(--card, #161b22);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .06) inset, 0 30px 70px -24px rgba(0, 0, 0, .8);
+  color: var(--text);
+  animation: tcdIn .22s var(--fx-ease) both;
+}
+.tcd-pop[hidden] { display: none; }
+@keyframes tcdIn { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
+.tcd-kicker { font-size: .66rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--muted2); }
+.tcd-title { font-size: 1.25rem; font-weight: 800; letter-spacing: -.02em; margin-top: 3px; overflow-wrap: anywhere; }
+.tcd-when { font-size: .8rem; color: var(--muted2); margin-top: 2px; }
+.tcd-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
+.tcd-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 10px 4px 8px; border-radius: 13px;
+  border: 1px solid var(--fx-hair);
+  background: linear-gradient(160deg, rgba(var(--accent-rgb), .12), rgba(255, 255, 255, .015) 70%);
+}
+.tcd-tile b {
+  font-size: 1.7rem; font-weight: 800; line-height: 1.05; font-variant-numeric: tabular-nums;
+  background: var(--fx-accent-grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.tcd-tile span { font-size: .64rem; font-weight: 700; color: var(--muted2); text-transform: uppercase; letter-spacing: .06em; text-align: center; }
+.tcd-done { margin-top: 14px; font-size: 1rem; font-weight: 700; }
+.tcd-prog { height: 6px; border-radius: 99px; background: rgba(255, 255, 255, .07); margin-top: 14px; overflow: hidden; }
+.tcd-prog i { display: block; height: 100%; border-radius: inherit; background: var(--fx-accent-grad); }
+.tcd-progl { font-size: .72rem; color: var(--muted2); margin-top: 5px; }
+.tcd-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.tcd-actions button { padding: 7px 12px; font-size: .78rem; }
+.tcd-actions .tcd-stop:hover { border-color: rgba(248, 81, 73, .5); background: rgba(248, 81, 73, .1); }
+.tcd-empty p { font-size: .84rem; line-height: 1.5; color: var(--muted2); margin: 8px 0 0; }
+#countdownForm { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--fx-hair); }
+.tcd-flabel { display: block; font-size: .72rem; font-weight: 700; color: var(--muted2); margin: 0 0 4px; }
+.tcd-flabel span { font-weight: 500; color: var(--muted); }
+#countdownForm input { width: 100%; margin: 0 0 10px !important; }
+.tcd-frow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tcd-factions { display: flex; gap: 8px; }
+.tcd-factions button { flex: 1; padding: 8px 12px; }
+.tcd-fmsg { font-size: .74rem; color: var(--red, #f85149); margin-top: 6px; }
+.tcd-fmsg:empty { display: none; }
+body[data-theme="light"] .tcd-prog { background: rgba(15, 23, 42, .08); }
+
+/* ── Focus ring: visible for keyboards, invisible for mice ──────────────── */
+#app :is(button, a, [role=tab], [role=button], summary):focus-visible,
+.modal-overlay :is(button, a):focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), .8);
+  outline-offset: 2px;
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+#app * { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .14) transparent; }
+body[data-theme="light"] #app * { scrollbar-color: rgba(15, 23, 42, .2) transparent; }
+
+/* ── The Report button ───────────────────────────────────────────────────
+   On a laptop it floated over the bottom of every tab and covered whatever
+   was there. It now sits in the empty foot of the sidebar. */
+@media (min-width: 769px) {
+  body:not(.sidebar-collapsed) #fluxReportFab {
+    left: 24px !important;
+    right: auto !important;
+    bottom: 112px !important;
+  }
+  /* That foot is only empty on a tall screen. On a projector (1280×720) the
+     list runs under the button and Profile and Settings sat behind it, so
+     leave room at the end of the list to scroll them clear. */
+  body:not(.sidebar-collapsed) #sidebar .sidebar-nav { padding-bottom: 60px !important; }
+}
+
+/* ── Motion off ──────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  #app *, .modal-overlay * { transition-duration: .01ms !important; }
+  #app button:active:not(:disabled) { transform: none; }
+}
+html.flux-lowend #app * { transition: none !important; }
+
+/* ── Planner tour ────────────────────────────────────────────────────────
+   Spotlight + card, the same shape as the Flux Grapher's tour: the page dims
+   except for the thing being described, and the card sits beside it. It
+   replaces a floating tooltip that had no Back and no dimming. */
+.ftour{position:fixed;inset:0;z-index:var(--flux-z-palette,9000);opacity:0;transition:opacity .22s ease}
+.ftour.is-on{opacity:1}
+.ftour.is-out{opacity:0;pointer-events:none}
+.ftour-spot{position:fixed;border-radius:14px;box-shadow:0 0 0 9999px rgba(4,7,16,.62),0 0 0 2px rgba(var(--accent-rgb),.75),0 0 26px rgba(var(--accent-rgb),.45);transition:top .38s cubic-bezier(.2,.8,.2,1),left .38s cubic-bezier(.2,.8,.2,1),width .38s cubic-bezier(.2,.8,.2,1),height .38s cubic-bezier(.2,.8,.2,1);pointer-events:none}
+.ftour-card{position:fixed;padding:16px 18px 14px;border-radius:16px;background:var(--flux-elev-bg,var(--card-solid,#121826));border:1px solid rgba(var(--accent-rgb),.35);box-shadow:0 18px 50px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.06);color:var(--text);transition:top .38s cubic-bezier(.2,.8,.2,1),left .38s cubic-bezier(.2,.8,.2,1)}
+.ftour-card.is-in{animation:ftourIn .32s cubic-bezier(.2,.8,.2,1) both}
+.ftour-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+.ftour-count{font:600 .68rem 'JetBrains Mono',monospace;color:var(--accent);letter-spacing:.04em}
+.ftour-dots{display:inline-flex;gap:4px}
+.ftour-dots i{width:5px;height:5px;border-radius:50%;background:var(--muted2,#7b809a);opacity:.35;transition:background-color .2s ease,width .2s ease,opacity .2s ease}
+.ftour-dots i.on{width:14px;border-radius:3px;opacity:1;background:var(--fx-accent-grad,var(--accent))}
+.ftour-title{margin:0 0 6px;font-size:.98rem;font-weight:800;letter-spacing:-.01em}
+.ftour-body{margin:0 0 14px;font-size:.8rem;line-height:1.6;color:var(--text2,#c8cad8)}
+.ftour-btns{display:flex;align-items:center;gap:8px}
+.ftour-grow{flex:1}
+.ftour-btns button{min-height:0;padding:7px 13px;border-radius:10px;font-size:.76rem;font-weight:600;cursor:pointer;font-family:inherit}
+.ftour-skip{background:transparent;border:0;color:var(--muted2);padding-left:0!important}
+.ftour-skip:hover{color:var(--text)}
+.ftour-back{background:rgba(255,255,255,.05);border:1px solid var(--border2);color:var(--text)}
+.ftour-next{background:var(--fx-accent-grad,var(--accent));border:0;color:#fff;box-shadow:0 6px 18px -8px rgba(var(--accent-rgb),.8)}
+.ftour-next:hover{filter:brightness(1.08)}
+@keyframes ftourIn{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){
+  .ftour,.ftour-spot,.ftour-card{transition:none}
+  .ftour-card.is-in{animation:none}
+}
+
+/* ── Onboarding: the ready step ─────────────────────────────────────── */
+#onboarding .ob-ready{display:flex;flex-direction:column;gap:8px;margin:14px 0 16px;text-align:left}
+#onboarding .ob-ready-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);animation:ftourIn .4s cubic-bezier(.2,.8,.2,1) both}
+#onboarding .ob-ready-row:nth-child(2){animation-delay:.05s}
+#onboarding .ob-ready-row:nth-child(3){animation-delay:.1s}
+#onboarding .ob-ready-row:nth-child(4){animation-delay:.15s}
+#onboarding .ob-ready-row:nth-child(5){animation-delay:.2s}
+#onboarding .ob-ready-ico{flex:none;width:34px;height:34px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;background:rgba(var(--accent-rgb),.12);font-size:1rem}
+#onboarding .ob-ready-row b{display:block;font-size:.86rem}
+#onboarding .ob-ready-row small{display:block;font-size:.74rem;color:var(--muted2);margin-top:1px}
+#onboarding .ob-ready-tour{display:flex;align-items:center;justify-content:center;gap:8px;margin:0 0 14px;font-size:.8rem;color:var(--muted2);cursor:pointer}
+#onboarding .ob-ready-tour input{width:16px;height:16px;margin:0;accent-color:var(--accent)}
+@media (prefers-reduced-motion:reduce){#onboarding .ob-ready-row{animation:none}}
+
+/* ── Phone top bar ───────────────────────────────────────────────────────
+   Since the countdown moved into the top bar, a 390px phone ran out of room
+   and the brand was the thing that shrank: "Flux" was cut to "Flu". The brand
+   no longer shrinks, and on the narrowest phones the "3 tasks" pill steps
+   aside while a countdown is showing (the dashboard lists the tasks anyway). */
+@media (max-width: 768px) {
+  .topbar .topbar-mob-brand { flex-shrink: 0; }
+}
+@media (max-width: 430px) {
+  .topbar:has(#topbarCountdown:not([hidden])) #topbarTaskPill { display: none !important; }
+}
+
+/* ── Top bar at laptop widths ────────────────────────────────────────────
+   Since the countdown moved into the top bar, the right-hand group (the
+   countdown, the date, the task count) could not shrink, while the left
+   group was allowed to shrink narrower than its own buttons — so below about
+   1100px the countdown slid over "New task" and the two read as one. Now the
+   left group keeps its size (a long page title truncates instead), the
+   countdown gives way first, and the less-needed pieces step aside as the
+   window narrows. Phones keep their own layout (≤768px). */
+@media (min-width: 769px) {
+  .topbar .topbar-left-cluster { flex: 0 1 auto; min-width: 0; }
+  .topbar .topbar-title-wrap { flex: 0 1 auto; min-width: 0; }
+  .topbar .topbar-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar .topbar-new-task-btn { flex-shrink: 0; }
+  .topbar .topbar-right { flex: 0 1 auto; min-width: 0; margin-left: auto; }
+  .topbar #topbarCountdown { flex: 0 1 auto; min-width: 0; }
+  .topbar #topbarCountdown .tcd-name { flex: 0 1 auto; min-width: 0; }
+}
+/* Compact countdown: ⏳ 257d. The full name and count stay in its tooltip
+   and one click away in the panel. */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .topbar .topbar-cd { padding: 0 11px 0 9px; gap: 5px; }
+  .topbar .topbar-cd .tcd-name,
+  .topbar .topbar-cd .tcd-count { display: none; }
+  .topbar .topbar-cd .tcd-short { display: inline; }
+  .topbar .topbar-cd.is-empty .tcd-short { display: none; }
+}
+@media (min-width: 769px) and (max-width: 900px) {
+  .topbar #datePill { display: none !important; }
+  .topbar .topbar-new-task-btn:not(.topbar-mob-only) .topbar-new-task-label { display: none; }
+  .topbar .topbar-new-task-btn:not(.topbar-mob-only) { padding: 8px 11px; }
+}
+
+/* Phone: the task filters in one row you can swipe along, not three stacked
+   rows with "By importance" floating beside them (demo polish, 2026-10-01). */
+@media (max-width: 768px) {
+  #dashboard .dash-filters-row { flex-wrap: wrap; row-gap: 8px; }
+  #dashboard #filterChips {
+    flex: 1 1 100%;
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 0 !important;
+  }
+  #dashboard #filterChips::-webkit-scrollbar { display: none; }
+  #dashboard #filterChips .tmode-btn { flex: 0 0 auto; padding: 7px 14px !important; font-size: .8rem !important; }
+}
+/* An empty toolbar beside "Tasks" (nothing has been added to it) still took a
+   line of its own on a phone, leaving a gap under the heading. */
+#dashboard .dash-toolbar:not(:has(:not(.dash-toolbar-views))):has(.dash-toolbar-views:empty) { display: none; }
+/* Class joining is off (fluxStudentLinksOn in app.js), so the teacher-side ways
+   to reach students are hidden. !important beats the inline display the role
+   code writes on every nav item. */
+.flux-no-student-links [data-needs-students] { display: none !important; }
+/* Without rosters the teacher dashboard's bottom row is only Messages. */
+#teacherDashboard .teacher-main-grid.teacher-main-grid--solo { grid-template-columns: minmax(0, 460px); }
+/* Counselor contact is paused (fluxCounselorContactOn in app.js): no student
+   can link to a counselor, so the "Students" entry has nobody to show. */
+.flux-no-counselor-contact [data-needs-counselor-links] { display: none !important; }
+/* Educators on a phone: the More sheet's built-in buttons are the student tabs.
+   syncMoreSheetForEducator (app.js) adds the educator's own sidebar entries;
+   these hide the student ones. The owner's admin slot is left alone. */
+#moreSheet.more-sheet--edu .more-sheet-item[data-nav-tab]:not([data-edu-item]):not(#moreSheetAdminSlot *),
+#moreSheet.more-sheet--edu .more-sheet-item[data-action="book-counselor"] { display: none !important; }
+
+/* ── Light theme: outlined buttons ───────────────────────────────────────
+   These buttons draw their outline in see-through white, which is invisible
+   on the light theme's white cards: on a projector, Meeting note, Log PD,
+   Sub-plan template and Mark all present read as plain text. */
+[data-theme="light"] :is(.spdx-act, .lh-action-btn, .lh-att-btn, .lh-mat-btn, .cm-action-btn, .fluxw-btn-sec, .fluxw-pri-toggle) {
+  background: rgba(15, 23, 42, .04) !important;
+  border-color: rgba(15, 23, 42, .14) !important;
+}
+[data-theme="light"] :is(.spdx-act, .lh-action-btn, .lh-att-btn, .lh-mat-btn, .cm-action-btn, .fluxw-btn-sec, .fluxw-pri-toggle):hover {
+  background: rgba(var(--accent-rgb), .08) !important;
+  border-color: rgba(var(--accent-rgb), .35) !important;
+}
+
+/* Flux AI paused (FLUX_AI_ENABLED in app.js): hide what would lead to it. */
+.flux-no-ai .quick-add-agent-link,
+.flux-no-ai #ecAICard,
+.flux-no-ai #obScheduleImportRoot,
+.flux-no-ai #weeklyReviewBanner { display: none !important; }
+
+/* Printing: paper is white whatever the theme. A dark theme printed its pale
+   text onto white paper (browsers leave backgrounds out by default), so it
+   came out faint grey. Printing always uses the Cloud (light) colours, with
+   the accent darkened so links and highlights still read on paper. */
+@media print {
+  :root, body, body[data-theme] {
+    --bg: #ffffff !important; --bg2: #ffffff !important; --bg3: #ffffff !important;
+    --card: #ffffff !important; --card2: #f6f8fa !important; --card3: #f6f8fa !important; --card-solid: #ffffff !important;
+    --border: #d8dee4 !important; --border2: #d0d7de !important;
+    --text: #1f2328 !important; --text2: #424a53 !important;
+    --muted: #57606a !important; --muted2: #424a53 !important;
+    --accent: #0969da !important; --accent2: #0969da !important; --accent-rgb: 9, 105, 218 !important;
+    --green: #1a7f37 !important; --red: #cf222e !important; --gold: #9a6700 !important;
+    --purple: #8250df !important; --orange: #bc4c00 !important;
+  }
+  html, body { background: #ffffff !important; color: #1f2328 !important; }
+  body::before, body::after { display: none !important; }
+}

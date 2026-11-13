@@ -1,0 +1,237 @@
+/* Flux · Themed date picker — paired with public/js/flux-datepicker.js.
+   Everything here is driven by the app's existing tokens (--card, --border,
+   --accent, --text, --muted), so it follows every theme and custom accent
+   instead of the platform's own calendar colours. */
+
+/* Kill the native picker's trigger. The popup it opens cannot be styled, so
+   the whole control is replaced; hiding the indicator is what stops both
+   calendars appearing at once. Typing the date by keyboard still works. */
+.fdp-input::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  display: none;
+}
+/* Hiding the native indicator also removed the only visual cue that the field
+   opens a calendar, so draw one back on. It is painted on the input rather than
+   added as a real button because an <input> cannot host child elements or
+   ::after, and wrapping the field would disturb the flex rows these sit in.
+   The whole input is the click target, so this is affordance, not control. */
+/* The app-wide field rule is `:is(#app, #loginScreen) input:not(...)`, which
+   carries an id and so outranks a bare class — the icon silently lost the
+   cascade. Matching that shape (plus the class) takes it back.
+
+   `input[type="date"]` and not a bare `.fdp-input`, because an attribute
+   selector counts in the *class* column: styles.css sets
+   `input[type=date] { padding: 10px 14px !important }` at (0,1,1), which
+   outranks a lone class at (0,1,0), so the 38px gutter below was being
+   discarded and the date ran under the icon. Measured `padding-right: 14px` on
+   a live field with the class correctly applied. This selector is (0,2,1).
+   Safe to narrow: upgrade() only ever adds .fdp-input to input[type="date"]. */
+input[type="date"].fdp-input,
+:is(#app, #loginScreen) input[type="date"].fdp-input {
+  cursor: pointer;
+  /* !important because the shared field rule sets `padding: 10px 14px
+     !important`, which no amount of specificity can outrank — without this the
+     value text runs underneath the icon. */
+  padding-right: 38px !important;
+  /* !important on the icon too. The themes restyle fields with the `background`
+     *shorthand* — html.flux-layout-pulse input[type=date] is one, at (0,2,2) —
+     and a shorthand resets background-image to none, so the calendar cue was
+     being wiped out entirely: measured `background-image: none` on a live
+     field. Longhands are used deliberately for the same reason, so nothing
+     here can reset a neighbouring property by accident. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239aa3b2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cpath d='M16 2v4M8 2v4M3 10h18'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 12px center !important;
+  background-size: 17px 17px !important;
+}
+/* Brighten the icon on hover/open so it reads as interactive. */
+input[type="date"].fdp-input:hover,
+input[type="date"].fdp-input[aria-expanded="true"],
+:is(#app, #loginScreen) input[type="date"].fdp-input:hover,
+:is(#app, #loginScreen) input[type="date"].fdp-input[aria-expanded="true"] {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cpath d='M16 2v4M8 2v4M3 10h18'/%3E%3C/svg%3E");
+}
+
+.fdp-pop {
+  position: fixed;
+  /* Above modals, so a date field inside a dialog still opens on top. */
+  z-index: calc(var(--flux-z-modal, 500) + 20);
+  width: 296px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--card, #12161f);
+  border: 1px solid var(--border2, rgba(255, 255, 255, .1));
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, .5),
+    0 0 0 1px rgba(var(--accent-rgb), .1),
+    inset 0 1px 0 rgba(255, 255, 255, .04);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  font-family: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+  animation: fdpIn .14s cubic-bezier(.22, 1, .36, 1) both;
+}
+/* Vertical only. scale() grows from the centre, so both side edges travelled
+   as it settled — measured 27.2px → 25.0px of left drift over the 140ms — and
+   a calendar that slides sideways after it has already appeared reads as a
+   glitch rather than as an entrance. Dropping down is the whole idea. */
+@keyframes fdpIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fdp-pop { animation: none; }
+}
+
+/* ── header ── */
+.fdp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.fdp-title {
+  flex: 1;
+  text-align: center;
+  font-size: .86rem;
+  font-weight: 800;
+  letter-spacing: -.01em;
+  color: var(--text, #fff);
+}
+.fdp-nav {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--border, rgba(255, 255, 255, .08));
+  color: var(--muted2, #9aa3b2);
+  font-size: 1rem;
+  line-height: 1;
+  transition: color .14s, border-color .14s, background .14s;
+}
+.fdp-nav:hover {
+  color: var(--text, #fff);
+  border-color: rgba(var(--accent-rgb), .4);
+  background: rgba(var(--accent-rgb), .08);
+}
+
+/* ── weekday header ── */
+.fdp-dow {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.fdp-dow span {
+  text-align: center;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  color: var(--muted, #6b7280);
+  font-family: 'JetBrains Mono', monospace;
+  padding: 4px 0;
+}
+
+/* ── day grid ── */
+.fdp-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.fdp-day {
+  aspect-ratio: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text2, var(--text, #e6e9ef));
+  font-family: inherit;
+  font-size: .78rem;
+  font-weight: 600;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.fdp-day:hover:not(:disabled) {
+  background: rgba(var(--accent-rgb), .12);
+  color: var(--text, #fff);
+}
+.fdp-day:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), .7);
+  outline-offset: 1px;
+}
+/* Days spilling in from the neighbouring months stay legible but recede. */
+.fdp-day--outside { color: var(--muted, #6b7280); opacity: .55; }
+/* Today gets a ring, not a fill, so it stays visible when another day is
+   selected — two filled chips would read as two selections. */
+.fdp-day--today:not(.fdp-day--selected) {
+  border-color: rgba(var(--accent-rgb), .45);
+  color: var(--accent);
+}
+.fdp-day--selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent,#fff);
+  font-weight: 800;
+  box-shadow: 0 4px 14px rgba(var(--accent-rgb), .35);
+}
+.fdp-day--selected.fdp-day--outside { opacity: 1; }
+.fdp-day:disabled { opacity: .25; cursor: default; }
+
+/* ── footer ── */
+.fdp-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, .08));
+}
+.fdp-action {
+  padding: 6px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--border, rgba(255, 255, 255, .08));
+  color: var(--muted2, #9aa3b2);
+  font-family: inherit;
+  font-size: .74rem;
+  font-weight: 700;
+  transition: color .14s, border-color .14s, background .14s;
+}
+.fdp-action:hover {
+  color: var(--text, #fff);
+  border-color: rgba(var(--accent-rgb), .4);
+  background: rgba(var(--accent-rgb), .08);
+}
+.fdp-action--accent { color: var(--accent); border-color: rgba(var(--accent-rgb), .35); }
+
+/* Phones get a slightly wider grid and larger taps. */
+@media (max-width: 420px) {
+  .fdp-pop { width: min(320px, calc(100vw - 16px)); }
+  .fdp-day { font-size: .82rem; }
+}
+
+/* Today / Tomorrow / Clear under a field marked data-fdp-quick (New task and
+   Edit task). Same three, same small pills as the "Change due date" box a task
+   card opens, so a due date is set the same way wherever you are. */
+.fdp-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.fdp-quick .fdp-chip {
+  font-size: .7rem;
+  padding: 4px 10px;
+  margin: 0;
+  width: auto;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+.fdp-quick .fdp-chip--clear { color: var(--muted); }

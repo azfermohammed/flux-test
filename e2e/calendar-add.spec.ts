@@ -1,0 +1,242 @@
+import { test, expect } from '@playwright/test';
+import { gotoScenario } from './helpers';
+
+/**
+ * Calendar's day panel has one add button.
+ *
+ * It used to have two, and the split was backwards: "+ Task" opened a dialog
+ * with a name, a subject and a priority — no date, no time, no notes — while
+ * "+ Event" opened the full one, which has carried a Task/Event/EC switcher the
+ * whole time. So the button named after what you wanted did strictly less, and
+ * a task added from the calendar quietly lost its time and notes.
+ *
+ * These pin the merged behaviour: the poorer path stays gone, and the surviving
+ * dialog really does save every field it shows. A task picked there now opens
+ * the same New task form as the rest of the planner (dated to the selected
+ * day), so a calendar task gets estimates, plan-it-out and repeats too; the
+ * calendar dialog keeps events and activities.
+ */
+
+const TYPE_ROWS: Record<string, string[]> = {
+  event: ['Title', 'Date', 'Notes'],
+  ec: ['Activity', 'Title', 'Date', 'Notes'],
+};
+
+async function openDialog(page: import('@playwright/test').Page) {
+  await page.evaluate(() => (window as unknown as { nav: (t: string) => void }).nav('calendar'));
+  await page.waitForTimeout(800);
+  await page.locator('.cal-day[data-cal-date]').nth(14).click();
+  await page.waitForTimeout(300);
+  await page.locator('#calAddEventBtn').click();
+  await expect(page.locator('#addEventModal')).toBeVisible();
+}
+
+test.describe('Calendar add dialog', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await gotoScenario(page, 'student-semester');
+  });
+
+  test('the day panel offers one add button, and the poorer task dialog is gone', async ({ page }) => {
+    await page.evaluate(() => (window as unknown as { nav: (t: string) => void }).nav('calendar'));
+    await page.waitForTimeout(800);
+    await page.locator('.cal-day[data-cal-date]').nth(14).click();
+    await page.waitForTimeout(300);
+
+    const labels = await page.evaluate(() => [...document.querySelectorAll('.cal-selected-actions button')]
+      .filter((b) => getComputedStyle(b).display !== 'none')
+      .map((b) => b.textContent?.trim() || ''));
+    expect(labels, 'the add button should not be named after only one of the things it adds')
+      .not.toContain('+ Task');
+    expect(labels).toContain('+ Add');
+
+    // The old path is deleted, not merely unhooked — a second add-task route
+    // that still compiles is one something wires back up by accident.
+    const ghosts = await page.evaluate(() => {
+      const w = window as unknown as Record<string, unknown>;
+      return ['openAddForDate', 'showCalAddModal', 'submitCalTask'].filter((f) => typeof w[f] === 'function');
+    });
+    expect(ghosts, `${ghosts.join(', ')} still exist`).toEqual([]);
+    expect(await page.locator('#calAddBtn').count(), '#calAddBtn is back').toBe(0);
+  });
+
+  test('a task opens the New task form for that day and keeps its time and notes', async ({ page }) => {
+    await openDialog(page);
+    const day = await page.evaluate(() => (document.querySelector('.cal-day.selected[data-cal-date]') as HTMLElement | null)?.dataset.calDate || '');
+    await page.locator('#addEventTypeTask').click();
+    await expect(page.locator('#addEventModal')).toBeHidden();
+    await expect(page.locator('#dashAddTaskModal')).toBeVisible();
+    if (day) await expect(page.locator('#taskDate'), 'the selected day did not reach the form').toHaveValue(day);
+
+    await page.fill('#taskName', 'Guard task');
+    await page.locator('#taskMoreOptions > summary').click();
+    await page.fill('#taskTime', '14:30');
+    await page.fill('#taskNotes', 'guard notes');
+    await page.selectOption('#taskPriority', 'high');
+    await page.locator('#dashAddTaskModal button', { hasText: 'Add Task' }).click();
+    await expect(page.locator('#dashAddTaskModal')).toBeHidden();
+
+    const saved = await page.evaluate(() => {
+      const t = (JSON.parse(localStorage.getItem('tasks') || '[]') as Record<string, unknown>[])
+        .find((x) => x.name === 'Guard task');
+      return t ? { date: t.date, time: t.time, priority: t.priority, notes: t.notes } : null;
+    });
+    expect(saved, 'the task was not saved at all').not.toBeNull();
+    expect(saved!.date, 'the selected day did not reach the task').toBeTruthy();
+    if (day) expect(saved!.date).toBe(day);
+    expect(saved!.time).toBe('14:30');
+    expect(saved!.notes).toBe('guard notes');
+    expect(saved!.priority).toBe('high');
+  });
+
+  test('an event saves its own fields', async ({ page }) => {
+    await openDialog(page);
+    await page.locator('#addEventTypeEvent').click();
+    await page.fill('#addEventTitle', 'Guard event');
+    await page.fill('#addEventTime', '09:15');
+    await page.locator('#addEventPrimaryBtn').click();
+    await expect(page.locator('#addEventModal')).toBeHidden();
+
+    const ev = await page.evaluate(() => (JSON.parse(localStorage.getItem('flux_events') || '[]') as Record<string, unknown>[])
+      .find((x) => x.title === 'Guard event') || null);
+    expect(ev, 'the event was not saved').not.toBeNull();
+    expect(ev!.time).toBe('09:15');
+    expect(ev!.date).toBeTruthy();
+  });
+
+  test('an empty title is refused instead of saving a blank row', async ({ page }) => {
+    await openDialog(page);
+    const before = await page.evaluate(() => JSON.parse(localStorage.getItem('flux_events') || '[]').length);
+    await page.locator('#addEventPrimaryBtn').click();
+    await page.waitForTimeout(400);
+    await expect(page.locator('#addEventModal'), 'the dialog closed on an empty title').toBeVisible();
+    const after = await page.evaluate(() => JSON.parse(localStorage.getItem('flux_events') || '[]').length);
+    expect(after, 'a nameless event was saved').toBe(before);
+  });
+
+  test('each type shows the fields it needs and hides the ones it does not', async ({ page }) => {
+    await openDialog(page);
+    for (const [type, expected] of Object.entries(TYPE_ROWS)) {
+      await page.evaluate((t) => (window as unknown as { setAddEventType: (x: string) => void }).setAddEventType(t), type);
+      await page.waitForTimeout(200);
+      const shown = await page.evaluate(() => [...document.querySelectorAll('#addEventModal .mrow')]
+        .filter((r) => getComputedStyle(r).display !== 'none')
+        .map((r) => r.querySelector('label')?.textContent?.trim() || ''));
+      for (const row of expected) {
+        expect(shown, `${type} is missing the ${row} field`).toContain(row);
+      }
+      // Priority is meaningless for something that is not a task.
+      if (type !== 'task') {
+        expect(shown, `${type} should not ask for a task priority`).not.toContain('Priority');
+      }
+    }
+  });
+
+  test('the dialog fits a phone and lines its labels up consistently', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openDialog(page);
+    const r = await page.evaluate(() => {
+      const card = document.querySelector('#addEventModal .modal-card') as HTMLElement;
+      const gaps = ([...card.querySelectorAll('label')] as HTMLElement[])
+        .filter((l) => getComputedStyle(l.parentElement as HTMLElement).display !== 'none')
+        .map((l) => {
+          const ctrl = (l.parentElement as HTMLElement).querySelector('input,select,textarea,button') as HTMLElement | null;
+          return ctrl ? Math.round(ctrl.getBoundingClientRect().top - l.getBoundingClientRect().bottom) : -1;
+        })
+        .filter((n) => n >= 0);
+      const cr = card.getBoundingClientRect();
+      return { gaps, overflowsRight: cr.right > window.innerWidth + 1, width: Math.round(cr.width) };
+    });
+    expect(r.overflowsRight, 'the dialog hangs off the side of a phone').toBe(false);
+    expect(r.gaps.length, 'no rows were measured, so this asserted nothing').toBeGreaterThan(4);
+    // One rhythm, not "close enough" — uneven gaps are what makes a form look untidy.
+    expect(new Set(r.gaps).size, `label-to-control gaps vary: ${r.gaps.join(', ')}`).toBe(1);
+  });
+
+  /*
+   * A task in the day panel can be edited, not just ticked or deleted.
+   *
+   * Events in that panel had a pencil from the start; tasks had only a scope
+   * toggle and a delete, so fixing a typo meant deleting the task and typing
+   * it again — losing the notes, subtasks and difficulty with it.
+   *
+   * It opens #editModal, the same editor the dashboard row uses, rather than
+   * the add dialog above. That one has no field for subtasks, difficulty,
+   * estimated time or dependencies, so editing through it would quietly drop
+   * them. Reusing the richer editor also means there is no third task form to
+   * keep in step with the other two.
+   */
+  test('a task in the day panel opens the full editor, with its details loaded', async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 950 });
+    await gotoScenario(page, 'student-semester');
+    await page.evaluate(() => (window as unknown as { nav: (t: string) => void }).nav('calendar'));
+    await page.waitForTimeout(900);
+
+    /* The date comes from the selected cell rather than being computed here:
+       calYear/calMonth live in the bundle's closure, so reading them off
+       window yields undefined, which built a NaN date and rendered an empty
+       panel — a test that would then have passed by checking nothing. */
+    const ymd = await page.evaluate(() => {
+      const w = window as any;
+      const cell = (document.querySelector('.cal-day.selected[data-cal-date]')
+        || document.querySelector('.cal-day[data-cal-date]')) as HTMLElement;
+      const date = cell.dataset.calDate as string;
+      w.tasks.unshift({ id: 777001, name: 'Edit me from the calendar', date,
+        time: '', subject: '', priority: 'med', type: 'hw', notes: 'original note',
+        done: false, createdAt: Date.now() });
+      w.save('tasks', w.tasks);
+      cell.click();
+      return date;
+    });
+    await page.waitForTimeout(700);
+
+    const pencil = page.locator('#calDayTasks [title="Edit task"]').first();
+    await expect(pencil, `no edit button on the calendar task row for ${ymd}`).toBeVisible();
+    await pencil.click();
+    await page.waitForTimeout(500);
+
+    await expect(page.locator('#editModal')).toBeVisible();
+    // Loaded, not blank — an editor that opens empty would wipe the task on save.
+    await expect(page.locator('#editText')).toHaveValue('Edit me from the calendar');
+    await expect(page.locator('#editNotes')).toHaveValue('original note');
+  });
+});
+
+test.describe('Calendar add dialog: switching type', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await gotoScenario(page, 'student-semester');
+  });
+
+  test('after picking Task, Event and Activity are still one tap away, and back again', async ({ page }) => {
+    await openDialog(page);
+    const day = await page.evaluate(() => (document.querySelector('.cal-day.selected[data-cal-date]') as HTMLElement | null)?.dataset.calDate || '');
+    await page.locator('#addEventTypeTask').click();
+    await expect(page.locator('#dashAddTaskModal')).toBeVisible();
+    // The New task form carries the same three types while it came from the calendar.
+    for (const id of ['#taskCalTypeTask', '#taskCalTypeEvent', '#taskCalTypeEc']) await expect(page.locator(id)).toBeVisible();
+    await page.locator('#taskCalTypeEvent').click();
+    await expect(page.locator('#dashAddTaskModal')).toBeHidden();
+    await expect(page.locator('#addEventModal')).toBeVisible();
+    if (day) await expect(page.locator('#addEventDate')).toHaveValue(day);
+    for (const id of ['#addEventTypeTask', '#addEventTypeEvent', '#addEventTypeEc']) await expect(page.locator(id)).toBeVisible();
+
+    // Activity, then Task again, then Activity from the task form.
+    await page.locator('#addEventTypeEc').click();
+    await expect(page.locator('#addEventTypeEvent')).toBeVisible();
+    await page.locator('#addEventTypeTask').click();
+    await expect(page.locator('#dashAddTaskModal')).toBeVisible();
+    await page.locator('#taskCalTypeEc').click();
+    await expect(page.locator('#addEventModal')).toBeVisible();
+    await expect(page.locator('#addEventExtraRow')).toBeVisible();
+  });
+
+  test('the New task form opened anywhere else has no calendar type row', async ({ page }) => {
+    await openDialog(page);
+    await page.locator('#addEventTypeTask').click();
+    await page.evaluate(() => (window as any).closeDashAddTaskModal());
+    await page.evaluate(() => (window as any).openDashAddTaskModal());
+    await expect(page.locator('#dashAddTaskModal')).toBeVisible();
+    await expect(page.locator('#taskCalTypeRow')).toBeHidden();
+  });
+});

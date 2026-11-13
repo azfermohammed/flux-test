@@ -1,0 +1,1006 @@
+/* ============================================================
+   views/safety.js — the seizure card, emergency mode, printing
+   ------------------------------------------------------------
+   Imported by main.js, which also calls showEmergency() from the SOS
+   button on every screen and from the #/sos shortcut.
+
+   This screen has two readers who need different things:
+
+     - The STUDENT, calmly, setting it up: editable, organised by role.
+     - A TEACHER, panicking, ten seconds in: no navigation, no jargon,
+       the biggest text in the app, a timer, and the two buttons that
+       matter — call a parent, call 911 — impossible to miss.
+
+   And a third, offline: the front office or a coach with a printed
+   copy and no access to the student's phone at all.
+
+   ESCAPING: `html` escapes every interpolated value. Anything that is
+   already markup must be wrapped in raw(), and anything built in a
+   plain template string must esc() its user data by hand.
+   ============================================================ */
+
+import {
+  html, raw, esc, telHref, dialable, prettyDate, prettyTime, initials, timeOf, dayKey, stamp, parseKey,
+  monthName,
+} from '../util.js';
+import * as store from '../store.js';
+import {
+  icon, toast, openSheet, closeSheet, confirmSheet, sheetValues,
+  openEmergency, closeEmergency, emergencyEl,
+} from '../ui.js';
+import { logSeizure } from './seizures.js';
+
+/* ============================================================
+   Header
+   ============================================================ */
+
+export function title() {
+  return 'Safety card';
+}
+
+export function subtitle(state) {
+  const n = (state.contacts || []).length;
+  const contacts = `${n} ${n === 1 ? 'contact' : 'contacts'}`;
+  return state.card.updated
+    ? `${contacts} · updated ${prettyDate(state.card.updated)}`
+    : contacts;
+}
+
+const firstName = (profile) => (profile.name || '').trim().split(/\s+/)[0] || '';
+
+/* ============================================================
+   Render
+   ============================================================ */
+
+export function render(state) {
+  const { card, contacts, profile } = state;
+
+  // Before a name is set there is no grammatical "If <X> has a seizure"
+  // — a pronoun fallback produced "If they has a seizure".
+  const who = firstName(profile);
+  const heading = who ? `If ${who} has a seizure` : 'If a seizure happens';
+
+  return html`
+    <div class="safety-hero">
+      <div class="safety-hero-ico" aria-hidden="true">${raw(icon('shield', 26))}</div>
+      <h2>${heading}</h2>
+      <p>
+        Written for whoever is standing there — a teacher, a coach, a stranger.
+        The SOS button at the top of every screen opens the big version, with
+        a seizure timer.
+      </p>
+      <div class="safety-hero-actions">
+        <button class="btn btn-on-danger" data-action="open-emergency">
+          ${raw(icon('shield', 18))} Open emergency card
+        </button>
+        <button class="btn btn-on-danger-ghost" data-action="print-card">
+          ${raw(icon('print', 18))} Print for school
+        </button>
+      </div>
+    </div>
+
+    ${raw(completeness(state))}
+
+    <div class="split-grid">
+      <div class="split-main">
+        ${raw(contactsSection(contacts))}
+        ${raw(looksLikeSection(card))}
+        ${raw(stepsSection('What to do', card.during, 'during', 'ok'))}
+        ${raw(stepsSection('What NOT to do', card.doNot, 'doNot', 'bad'))}
+        ${raw(emsSection(card))}
+        ${raw(stepsSection('Afterwards', card.after, 'after', ''))}
+      </div>
+      <div class="split-side">
+        ${raw(medicalSection(state))}
+        ${raw(rolesSection(card))}
+      </div>
+    </div>
+
+    <div class="disclaimer">
+      ${raw(icon('info', 16))}
+      <span>
+        <strong>Check this with a doctor.</strong> The first-aid steps follow
+        standard public seizure first aid, but every person's seizures are
+        different. Confirm this card with your neurologist and school nurse
+        before relying on it. Synara is not a medical device.
+      </span>
+    </div>
+  `;
+}
+
+/* ---------- What's still missing ----------
+   The card ships with standard first aid filled in, but the parts that
+   make it *this* student's card start blank. Say so plainly rather than
+   letting a half-empty card look finished. */
+
+function completeness(state) {
+  const missing = [];
+  if (!state.contacts.length) missing.push(['contact-open', '', 'Add someone to call']);
+  if (!state.profile.name) missing.push(['profile-edit', '', 'Add your name']);
+  if (!state.card.looksLike) missing.push(['card-edit', 'looksLike', 'Describe what your seizures look like']);
+  if (!state.card.forTeacher) missing.push(['card-edit', 'forTeacher', 'Add a note for teachers']);
+  if (!missing.length) return '';
+
+  const items = missing.map(([action, field, label]) => `
+    <li>
+      <button class="todo-row" data-action="${action}"${field ? ` data-field="${field}"` : ''}>
+        <span class="todo-dot" aria-hidden="true"></span>
+        <span class="grow">${label}</span>
+        <span class="chev">${icon('chevron', 16)}</span>
+      </button>
+    </li>`).join('');
+
+  return html`
+    <section class="card todo-card" aria-labelledby="todo-h">
+      <h2 id="todo-h" class="todo-h">${raw(icon('sparkle', 18))} Finish your card</h2>
+      <p class="t-sm ink-2">
+        ${missing.length === 1 ? 'One thing' : `${missing.length} things`} would make this
+        card much more useful to whoever has to use it.
+      </p>
+      <ul class="todo-list">${raw(items)}</ul>
+    </section>
+  `;
+}
+
+/* ---------- Contacts ---------- */
+
+/* "Mom · (555) 014-2007". The line wraps rather than truncating, and the
+   number itself never breaks: on a phone, the "First call" pill used to
+   squeeze it to "Mom · (5…" — hiding the one number that matters most.
+   A teacher on a laptop, where Call buttons can't dial, needs to read it. */
+function contactLine(c) {
+  return `<span class="contact-rt">${esc(c.relation)}${c.relation && c.phone ? ' · ' : ''}<span class="contact-ph">${esc(c.phone)}</span></span>`;
+}
+
+function contactRow(c) {
+  return `
+    <li class="contact-row">
+      <button class="contact-main" data-action="contact-open" data-id="${c.id}"
+              aria-label="Edit ${esc(c.name)}">
+        <span class="avatar" aria-hidden="true">${esc(initials(c.name))}</span>
+        <span class="contact-body">
+          <span class="contact-n">${esc(c.name)}</span>
+          <span class="contact-r">${c.primary ? '<span class="pill pill-brand">First call</span>' : ''}${contactLine(c)}</span>
+        </span>
+      </button>
+      ${callButton(c)}
+    </li>`;
+}
+
+function callButton(c) {
+  return dialable(c.phone)
+    ? `<a class="call-btn" href="${telHref(c.phone)}" aria-label="Call ${esc(c.name)}">${icon('phone', 16)} Call</a>`
+    : '<span class="pill pill-warn">No number</span>';
+}
+
+function contactsSection(contacts) {
+  const inner = contacts.length
+    ? `<ul class="rows">${contacts.map(contactRow).join('')}</ul>`
+    : `<div class="empty empty-sm">
+         <span class="empty-t">No one to call yet</span>
+         <span class="empty-s">The emergency card's biggest button calls whoever you put first.</span>
+         <button class="btn btn-sm btn-primary" data-action="contact-open">${icon('plus', 16)} Add a contact</button>
+       </div>`;
+
+  return html`
+    <section class="section" aria-labelledby="contacts-h">
+      <div class="section-head">
+        <h2 id="contacts-h">Who to call</h2>
+        ${raw(contacts.length ? `<button class="btn btn-sm btn-soft" data-action="contact-open">${icon('plus', 16)} Add</button>` : '')}
+      </div>
+      <div class="card card-flush">${raw(inner)}</div>
+    </section>
+  `;
+}
+
+/* ---------- Sections ---------- */
+
+function editButton(field, label) {
+  return `<button class="btn btn-sm btn-quiet" data-action="card-edit" data-field="${field}"
+                  aria-label="Edit ${esc(label)}">${icon('edit', 15)} Edit</button>`;
+}
+
+function looksLikeSection(card) {
+  const body = card.looksLike
+    ? `<p class="prose">${esc(card.looksLike)}</p>`
+    : '<p class="ink-3">Describe what happens, so somebody who has never seen one knows what they\'re looking at.</p>';
+
+  return html`
+    <section class="section" aria-labelledby="looks-h">
+      <div class="section-head">
+        <h2 id="looks-h">What it looks like</h2>
+        ${raw(editButton('looksLike', 'what it looks like'))}
+      </div>
+      <div class="card">${raw(body)}</div>
+    </section>
+  `;
+}
+
+function stepsList(steps, tone) {
+  return `<ol class="steps">${steps.map((s, i) => `
+    <li class="step" data-tone="${tone}">
+      <span class="step-n" aria-hidden="true">${tone === 'bad' ? '✕' : tone === 'ems' ? '!' : i + 1}</span>
+      <span>${esc(s)}</span>
+    </li>`).join('')}</ol>`;
+}
+
+function stepsSection(heading, steps, field, tone) {
+  const id = `sec-${field}`;
+  const body = steps && steps.length ? stepsList(steps, tone) : '<p class="ink-3">Nothing added yet.</p>';
+  return html`
+    <section class="section" aria-labelledby="${id}">
+      <div class="section-head">
+        <h2 id="${id}">${heading}</h2>
+        ${raw(editButton(field, heading))}
+      </div>
+      <div class="card">${raw(body)}</div>
+    </section>
+  `;
+}
+
+function emsSection(card) {
+  const steps = card.callEms || [];
+  return html`
+    <section class="section" aria-labelledby="sec-ems">
+      <div class="section-head">
+        <h2 id="sec-ems">Call 911 if…</h2>
+        ${raw(editButton('callEms', 'when to call 911'))}
+      </div>
+      <div class="card ems-card">${raw(steps.length ? stepsList(steps, 'ems') : '<p class="ink-3">Nothing added yet.</p>')}</div>
+    </section>
+  `;
+}
+
+function medicalSection(state) {
+  const { profile } = state;
+  const meds = store.activeMeds(state);
+  const rows = [
+    ['Seizure type', profile.seizureType],
+    ['Rescue medication', profile.rescueMed],
+    ['Allergies', profile.allergies],
+    ['Blood type', profile.bloodType],
+    ['Neurologist', [profile.neurologist, profile.neuroPhone].filter(Boolean).join(' · ')],
+  ].filter(([, v]) => v);
+
+  const medList = meds.length
+    ? meds.map((m) => `${esc(m.name)}${m.dose ? ` ${esc(m.dose)}` : ''}`).join(', ')
+    : '<span class="ink-faint">None added</span>';
+
+  const rowMarkup = rows
+    .map(([k, v]) => `<div class="kv-row"><dt class="kv-k">${k}</dt><dd class="kv-v">${esc(v)}</dd></div>`)
+    .join('');
+
+  return html`
+    <section class="section" aria-labelledby="medical-h">
+      <div class="section-head">
+        <h2 id="medical-h">Medical details</h2>
+        <button class="btn btn-sm btn-quiet" data-action="profile-edit">${raw(icon('edit', 15))} Edit</button>
+      </div>
+      <div class="card card-flush">
+        <dl class="kv">
+          ${raw(rowMarkup)}
+          <div class="kv-row"><dt class="kv-k">Current meds</dt><dd class="kv-v">${raw(medList)}</dd></div>
+        </dl>
+      </div>
+      <p class="hint">Shown on the emergency card and the printed copy — it's what paramedics ask for.</p>
+    </section>
+  `;
+}
+
+const ROLES = [
+  { field: 'forTeacher', label: 'For teachers', icon: 'school' },
+  { field: 'forNurse',   label: 'For the school nurse', icon: 'stethoscope' },
+  { field: 'forCoach',   label: 'For coaches and PE', icon: 'run' },
+];
+
+function rolesSection(card) {
+  const cards = ROLES.map((r) => `
+    <div class="card role-card">
+      <div class="card-head">
+        <h3>${icon(r.icon, 18)} ${r.label}</h3>
+        ${editButton(r.field, r.label)}
+      </div>
+      ${card[r.field]
+        ? `<p class="prose">${esc(card[r.field])}</p>`
+        : '<p class="ink-3 t-sm">Nothing added yet — what should this person know that isn\'t in the steps?</p>'}
+    </div>`).join('');
+
+  return html`
+    <section class="section" aria-labelledby="roles-h">
+      <h2 id="roles-h">Specific instructions</h2>
+      <div class="stack stack-3">${raw(cards)}</div>
+    </section>
+  `;
+}
+
+/* ============================================================
+   Emergency overlay + seizure timer
+   ------------------------------------------------------------
+   The card's first instruction is "start timing", and the 5-minute
+   mark is the line for calling 911 — so the card has a timer.
+
+   PHOTOSENSITIVITY: the only thing that changes every second is the
+   digits. At five minutes the block switches ONCE to a solid red state.
+   Nothing blinks, pulses, or flashes, ever.
+
+   The start time lives in sessionStorage, so closing the card by
+   accident or reloading mid-seizure doesn't lose the count, and the app
+   says the timer is still running (flagTimer).
+   ============================================================ */
+
+const TIMER_KEY = 'synara.timer';
+const EMS_SECONDS = 5 * 60;
+
+let tick = null;
+let stoppedAfter = null;   // seconds, once "It stopped" is pressed
+let startedStamp = null;   // "YYYY-MM-DDTHH:mm" the timer started
+let heldStart = null;      // the same start, in memory, for when storage is blocked
+
+function readStart() {
+  // This page's own copy is always the latest; storage is for after a reload.
+  let v = heldStart;
+  if (!v) {
+    try {
+      v = JSON.parse(sessionStorage.getItem(TIMER_KEY) || 'null');
+    } catch { /* storage blocked: the timer still works, just not across reloads */ }
+  }
+  // Ignore anything stale — a timer left over from hours ago is not
+  // this seizure.
+  if (v && typeof v.ms === 'number' && Date.now() - v.ms < 3 * 60 * 60 * 1000) return v;
+  return null;
+}
+
+function writeStart(v) {
+  heldStart = v;
+  try {
+    if (v) sessionStorage.setItem(TIMER_KEY, JSON.stringify(v));
+    else sessionStorage.removeItem(TIMER_KEY);
+  } catch { /* see above */ }
+  flagTimer();
+}
+
+/* Said wherever the rescue medication is shown. */
+const RESCUE_NOTE = 'From their seizure action plan. Only give it if you are trained to.';
+
+const clock = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+
+/* ---------- Nothing moves under a finger ----------
+   Someone who arrived six minutes late taps "+1 min" six times in the
+   same spot, fast, or presses Enter six times. So in the running and
+   over states the buttons are the same nodes in the same places: at
+   5:00 they only change colour, and Call 911 appears in the slot above
+   the clock, which is the same height either way (app.css). Focus never
+   moves on its own while the timer runs.
+
+   Where the buttons have to change — Start becoming "It stopped",
+   "It stopped" becoming "Log this seizure" — a second tap or Enter that
+   arrives within SETTLE_MS of the change was meant for the old button,
+   so the actions that end something (stop, log, reset, close the card)
+   ignore it. Calling 911 and "+1 min" are never held back. */
+const SETTLE_MS = 700;
+const SETTLE_GUARDED = '.em-timer [data-action="timer-stop"], .em-timer [data-action="timer-log"], ' +
+  '.em-timer [data-action="timer-reset"], [data-action="close-emergency"]';
+let settleUntil = 0;
+let settleTimer = null;
+
+/* The card is marked while it settles (tests wait on it; nothing shows). */
+function settle() {
+  settleUntil = Date.now() + SETTLE_MS;
+  const card = emergencyEl();
+  if (card) card.dataset.settling = 'true';
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => { if (card) delete card.dataset.settling; }, SETTLE_MS);
+}
+
+document.addEventListener('click', (e) => {
+  if (Date.now() >= settleUntil) return;
+  const node = e.target instanceof Element ? e.target.closest(SETTLE_GUARDED) : null;
+  if (!node || !node.closest('#emergency')) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+}, true);
+
+const callNow = (label) =>
+  `<a class="btn btn-lg btn-block btn-emergency em-timer-911" href="tel:911" data-timer-911>` +
+  `${icon('phone', 20)} <span data-timer-911-label>${esc(label)}</span></a>`;
+
+function timerMarkup() {
+  return `
+    <section class="em-timer" data-state="idle" aria-labelledby="em-timer-h">
+      <div class="em-timer-top">
+        <h3 id="em-timer-h" class="em-timer-h">${icon('timer', 18)} Seizure timer</h3>
+      </div>
+      <div class="em-timer-slot" data-timer-slot>
+        <span class="em-timer-hint" data-timer-hint>Start it now. If the seizure began earlier, you can add the minutes you missed.</span>
+      </div>
+      <div class="em-timer-clock" data-timer-clock aria-hidden="true">0:00</div>
+      <div class="sr-only" aria-live="assertive" data-timer-live></div>
+      <div class="em-timer-actions" data-timer-actions>
+        <button class="btn btn-lg btn-primary btn-block" data-action="timer-start" data-autofocus>
+          ${icon('play', 20)} Start timer
+        </button>
+      </div>
+    </section>`;
+}
+
+/* The slot above the clock holds either a line of text or, from 5:00,
+   the Call 911 button. Swapped only when its content changes. */
+function setSlot(box, kind, content) {
+  const slot = box.querySelector('[data-timer-slot]');
+  if (!slot) return;
+  if (kind === 'text') {
+    let hint = slot.querySelector('[data-timer-hint]');
+    if (!hint) {
+      slot.innerHTML = '<span class="em-timer-hint" data-timer-hint></span>';
+      hint = slot.querySelector('[data-timer-hint]');
+    }
+    if (hint.textContent !== content) hint.textContent = content;
+    return;
+  }
+  const label = slot.querySelector('[data-timer-911-label]');
+  if (!label) slot.innerHTML = callNow(content);
+  else if (label.textContent !== content) label.textContent = content;
+}
+
+function setTimerView(root, mode, secs) {
+  const box = root.querySelector('.em-timer');
+  if (!box) return;
+  const clockEl = box.querySelector('[data-timer-clock]');
+  const actionsEl = box.querySelector('[data-timer-actions]');
+  const live = box.querySelector('[data-timer-live]');
+  const was = box.dataset.state;
+  const before = actionsEl.getBoundingClientRect().top;
+
+  clockEl.textContent = clock(secs);
+
+  if (mode === 'running' || mode === 'over') {
+    const over = mode === 'over';
+    box.dataset.state = mode;
+    // The clock counts from when Start was pressed, which is rarely when
+    // the seizure began — so the 5 minutes are "from when it began", and
+    // "+1 min" lets whoever arrived late add the time they missed. It
+    // stays past 5:00: the record should say how long it really lasted.
+    if (over) setSlot(box, '911', 'Over 5 minutes — call 911 now');
+    else setSlot(box, 'text', `Call 911 at 5 minutes from when it began · ${clock(Math.max(0, EMS_SECONDS - secs))} to go`);
+
+    let stop = actionsEl.querySelector('[data-action="timer-stop"]');
+    let earlier = actionsEl.querySelector('[data-action="timer-earlier"]');
+    if (!stop || !earlier) {
+      // Idle (or stopped) to running: the one rebuild, right after Start.
+      actionsEl.innerHTML = `
+        <button class="btn btn-lg btn-block" data-action="timer-stop">${icon('stop', 18)} It stopped</button>
+        <button class="btn btn-block" data-action="timer-earlier">+1 min — it began earlier</button>`;
+      stop = actionsEl.querySelector('[data-action="timer-stop"]');
+      earlier = actionsEl.querySelector('[data-action="timer-earlier"]');
+      settle();
+    }
+    // Same nodes, new colours: on red they need the light-on-red look.
+    stop.className = `btn btn-lg btn-block ${over ? 'btn-on-danger-ghost' : 'btn-outline'}`;
+    earlier.className = `btn btn-block ${over ? 'btn-on-danger-ghost' : 'btn-quiet'}`;
+  } else if (mode === 'stopped') {
+    // Five minutes or more still needs 911 after the seizure ends (CDC,
+    // Epilepsy Foundation). Stay red with the call button — never a
+    // green "done" that hides it. Red is almost always showing already;
+    // at most this is the same single switch the timer makes at 5:00.
+    const long = secs >= EMS_SECONDS;
+    box.dataset.state = long ? 'over' : 'stopped';
+    const said = long
+      ? `It lasted ${clock(secs)}. That is 5 minutes or longer, so call 911 if no one has yet.`
+      : `It lasted ${clock(secs)}`;
+    if (long) setSlot(box, '911', 'Call 911');
+    else setSlot(box, 'text', said);
+    actionsEl.innerHTML = `
+      ${long ? `<p class="em-timer-hint em-timer-said" data-timer-hint>${esc(said)}</p>` : ''}
+      <button class="btn btn-lg btn-block ${long ? 'btn-on-danger-ghost' : 'btn-primary'}" data-action="timer-log">${icon('note', 18)} Log this seizure</button>
+      <button class="btn btn-block ${long ? 'btn-on-danger-ghost' : 'btn-quiet'}" data-action="timer-reset">Reset timer</button>`;
+    if (live) live.textContent = said;
+    settle();
+  }
+
+  // Belt and braces: if anything above the buttons changed height (a
+  // hint wrapping onto another line at a large text size), whatever is
+  // under the finger now may not be what it was aimed at.
+  if (was !== box.dataset.state && Math.abs(actionsEl.getBoundingClientRect().top - before) > 1) settle();
+}
+
+/* After "It stopped": five minutes or more still needs 911, so the call
+   button takes focus; a short one goes to "Log this seizure". */
+function focusAfterStop(root) {
+  const target = (stoppedAfter || 0) >= EMS_SECONDS
+    ? root.querySelector('[data-timer-911]')
+    : root.querySelector('[data-action="timer-log"]');
+  target?.focus({ preventScroll: true });
+}
+
+function startTicking(root) {
+  clearInterval(tick);
+  const live = root.querySelector('[data-timer-live]');
+  let lastMinute = -1;
+  let announcedOver = false;
+
+  const update = () => {
+    const start = readStart();
+    if (!start) return;
+    const secs = Math.max(0, Math.floor((Date.now() - start.ms) / 1000));
+    const over = secs >= EMS_SECONDS;
+    setTimerView(root, over ? 'over' : 'running', secs);
+
+    // Screen readers hear each whole minute, and the 5-minute line once
+    // (with the real count: "+1 min" can jump straight past five).
+    const minute = Math.floor(secs / 60);
+    if (live && minute !== lastMinute && minute > 0) {
+      live.textContent = over && !announcedOver
+        ? `${minute} minutes. Call 911 now.`
+        : `${minute} ${minute === 1 ? 'minute' : 'minutes'}`;
+      if (over) announcedOver = true;
+    }
+    lastMinute = minute;
+  };
+
+  update();
+  tick = setInterval(update, 1000);
+}
+
+function stopTicking() {
+  clearInterval(tick);
+  tick = null;
+}
+
+/** A timer is running, or one stopped and its seizure isn't logged yet:
+    main.js holds the first-run intro back until neither is true. */
+export function timerPending() {
+  return !!readStart() || stoppedAfter != null;
+}
+
+/* Closing the card doesn't stop the clock, so while it runs <html> is
+   marked and a bar under the app bar says so (synara.html, app.css):
+   whoever closed it, by accident or to look something up, knows the
+   timer is still counting and gets back to it in one tap. */
+function flagTimer() {
+  if (readStart()) document.documentElement.dataset.timer = 'running';
+  else delete document.documentElement.dataset.timer;
+}
+flagTimer();
+
+/* ---------- The overlay ---------- */
+
+function emBlock(heading, inner, tone = '') {
+  return `
+    <section class="em-block"${tone ? ` data-tone="${tone}"` : ''}>
+      <h3>${heading}</h3>
+      ${inner}
+    </section>`;
+}
+
+/** `onClose` runs after the card closes (main.js holds the first-run
+    welcome back until then, when #/sos opened the card). */
+export function showEmergency(state, { onClose } = {}) {
+  const { card, contacts, profile } = state;
+  // The big green button must ring someone. If the first-call contact
+  // has no usable number, fall to the first one who does.
+  const reachable = contacts.filter((c) => dialable(c.phone));
+  const primary = reachable.find((c) => c.primary) || reachable[0];
+  const others = contacts.filter((c) => c !== primary);
+  const meds = store.activeMeds(state);
+  const name = profile.name || 'This student';
+  const meta = [profile.pronouns, profile.grade, profile.school].filter(Boolean).join(' · ');
+
+  const callPrimary = primary ? `
+    <a class="em-call" href="${telHref(primary.phone)}">
+      <span class="em-call-ico" aria-hidden="true">${icon('phone', 22)}</span>
+      <span class="em-call-body">
+        <span class="em-call-n">Call ${esc(primary.name)}</span>
+        <span class="em-call-r">${esc(primary.relation)}${primary.relation ? ' · ' : ''}${esc(primary.phone)}</span>
+      </span>
+    </a>` : '';
+
+  const otherContacts = others.length ? emBlock('Other contacts', `
+    <ul class="rows">${others.map((c) => `
+      <li class="contact-row contact-row-flat">
+        <span class="contact-body">
+          <span class="contact-n">${esc(c.name)}</span>
+          <span class="contact-r">${contactLine(c)}</span>
+        </span>
+        ${callButton(c)}
+      </li>`).join('')}</ul>`) : '';
+
+  const medical = [
+    profile.seizureType && `<div class="kv-row"><dt class="kv-k">Seizure type</dt><dd class="kv-v">${esc(profile.seizureType)}</dd></div>`,
+    profile.allergies && `<div class="kv-row"><dt class="kv-k">Allergies</dt><dd class="kv-v">${esc(profile.allergies)}</dd></div>`,
+    meds.length && `<div class="kv-row"><dt class="kv-k">Medications</dt><dd class="kv-v">${meds.map((m) => `${esc(m.name)} ${esc(m.dose)}`).join(', ')}</dd></div>`,
+    profile.bloodType && `<div class="kv-row"><dt class="kv-k">Blood type</dt><dd class="kv-v">${esc(profile.bloodType)}</dd></div>`,
+    profile.neurologist && `<div class="kv-row"><dt class="kv-k">Neurologist</dt><dd class="kv-v">${esc(profile.neurologist)}${profile.neuroPhone ? ` · ${esc(profile.neuroPhone)}` : ''}</dd></div>`,
+  ].filter(Boolean).join('');
+
+  // Rescue medication sits right under the steps, where "follow their
+  // seizure action plan" points — not at the bottom with the details.
+  const rescue = profile.rescueMed ? emBlock('Rescue medication', `
+    <div class="stack stack-2">
+      <p class="prose em-rescue">${esc(profile.rescueMed)}</p>
+      <p class="t-sm ink-2">${esc(RESCUE_NOTE)}</p>
+    </div>`) : '';
+
+  const steps = (list, tone) => (list && list.length ? stepsList(list, tone) : '');
+
+  const markup = html`
+    <div class="em-bar">
+      <span class="em-bar-t">${raw(icon('shield', 20))} Seizure — what to do</span>
+      <button class="em-close" data-action="close-emergency">Close</button>
+    </div>
+
+    <div class="em-body">
+      <div class="em-inner">
+        <header class="em-who">
+          <h2 class="em-name">${name}</h2>
+          ${raw(meta ? `<span class="em-sub">${esc(meta)}</span>` : '')}
+        </header>
+
+        ${raw(timerMarkup())}
+
+        <div class="em-calls">
+          ${raw(callPrimary)}
+          <a class="em-911" href="tel:911">${raw(icon('phone', 22))} Call 911</a>
+        </div>
+
+        ${raw(card.during && card.during.length ? emBlock('What to do right now', steps(card.during, 'ok')) : '')}
+        ${raw(rescue)}
+        ${raw(card.callEms && card.callEms.length ? emBlock('Call 911 if', steps(card.callEms, 'ems'), 'bad') : '')}
+        ${raw(card.doNot && card.doNot.length ? emBlock('Do NOT', steps(card.doNot, 'bad')) : '')}
+        ${raw(card.looksLike ? emBlock('What their seizures look like', `<p class="prose">${esc(card.looksLike)}</p>`) : '')}
+        ${raw(card.after && card.after.length ? emBlock('Afterwards', steps(card.after, '')) : '')}
+        ${raw(medical ? emBlock('Medical details', `<dl class="kv kv-flat">${medical}</dl>`) : '')}
+        ${raw(otherContacts)}
+
+        <p class="em-foot">Standard seizure first aid. If in doubt, call 911.</p>
+      </div>
+    </div>
+  `;
+
+  openEmergency(markup, {
+    onMount(root) {
+      if (readStart()) {
+        startTicking(root);
+        root.querySelector('[data-action="timer-stop"]')?.focus({ preventScroll: true });
+      } else if (stoppedAfter != null) {
+        setTimerView(root, 'stopped', stoppedAfter);
+        // That swapped out Start timer, which had focus: never leave it on <body>.
+        focusAfterStop(root);
+      }
+      // A double tap on SOS must not land its second tap on Close, which
+      // sits in the same corner of the red bar.
+      settle();
+    },
+    onClose() {
+      stopTicking();
+      if (onClose) onClose();
+    },
+  });
+}
+
+/* ============================================================
+   Printable card
+   ------------------------------------------------------------
+   A printed copy taped inside a locker, or in the front office's
+   binder, is how most schools actually handle this. It has to come out
+   as a clean one-page document, not a screenshot of an app.
+   ============================================================ */
+
+/* "Oct 9, 2026". A printed card can sit in a binder for a year, and
+   without the year nobody can tell how old it is. */
+function printDate(key) {
+  const d = parseKey(key);
+  return `${monthName(d.getMonth())} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+/* The order follows how the paper gets used: who this is, the date and
+   "confirm with their neurologist", and the 911 box, then who to call —
+   near the top, so none of it can be pushed onto a second page — then
+   what to do. Long role notes are what overflow, one note at a time, and
+   the footer names the student, so a second page still says whose. */
+function printMarkup(state) {
+  const { card, contacts, profile } = state;
+  const meds = store.activeMeds(state);
+  const list = (items, cls) =>
+    `<ol${cls ? ` class="${cls}"` : ''}>${items.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>`;
+  // No heading over an empty box: "Afterwards" may have been cleared.
+  const steps = (heading, items, cls) =>
+    (items && items.length ? `<section><h2>${heading}</h2>${list(items, cls)}</section>` : '');
+
+  const sub = [profile.pronouns, profile.grade, profile.school].filter(Boolean).join(' · ');
+  const facts = [
+    ['Seizure type', profile.seizureType],
+    ['Allergies', profile.allergies],
+    ['Blood type', profile.bloodType],
+    ['Medications', meds.map((m) => {
+      const times = store.currentTimes(m).map(prettyTime).join(', ');
+      return `${m.name}${m.dose ? ` ${m.dose}` : ''}${times ? ` (${times})` : ''}`;
+    }).join('; ')],
+    ['Neurologist', [profile.neurologist, profile.neuroPhone].filter(Boolean).join(' — ')],
+  ].filter(([, v]) => v);
+
+  // The first-call contact leads, as on the emergency screen.
+  const callList = [...contacts].sort((a, b) => Number(b.primary) - Number(a.primary));
+
+  const roles = [
+    ['forTeacher', 'Teachers'], ['forNurse', 'School nurse'], ['forCoach', 'Coaches and PE'],
+  ].filter(([k]) => card[k]);
+
+  return `
+    <article class="pc">
+      <header class="pc-head">
+        <div>
+          <p class="pc-kicker">Seizure action card</p>
+          <h1 class="pc-name">${esc(profile.name || 'Student name')}</h1>
+          ${sub ? `<p class="pc-sub">${esc(sub)}</p>` : ''}
+          <p class="pc-dated">Printed ${printDate(dayKey())}${card.updated ? ` · card last updated ${printDate(card.updated)}` : ''}.
+            Standard seizure first aid — confirm with the student's neurologist.</p>
+        </div>
+        <div class="pc-911">In an emergency<strong>Call 911</strong></div>
+      </header>
+
+      ${facts.length ? `<dl class="pc-facts">${facts.map(([k, v]) =>
+        `<div${k === 'Medications' ? ' class="pc-wide"' : ''}><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : ''}
+
+      <section class="pc-who">
+        <h2>Who to call</h2>
+        ${callList.length ? `<table class="pc-contacts"><tbody>${callList.map((c) => `
+          <tr>
+            <td><strong>${esc(c.name)}</strong>${c.primary ? ' <span class="pc-first">Call first</span>' : ''}</td>
+            <td>${esc(c.relation)}</td>
+            <td>${esc(c.phone)}</td>
+          </tr>`).join('')}
+        </tbody></table>` : '<p>No contacts added yet.</p>'}
+      </section>
+
+      ${profile.rescueMed ? `<section class="pc-rescue"><h2>Rescue medication</h2>
+        <p>${esc(profile.rescueMed)}</p><p class="pc-note">${esc(RESCUE_NOTE)}</p></section>` : ''}
+
+      ${card.looksLike ? `<section><h2>What their seizures look like</h2><p>${esc(card.looksLike)}</p></section>` : ''}
+
+      <div class="pc-cols">
+        <div>
+          ${steps('What to do', card.during)}
+          ${steps('Afterwards', card.after)}
+        </div>
+        <div>
+          ${steps('Do NOT', card.doNot, 'pc-not')}
+          ${card.callEms && card.callEms.length ? `<section class="pc-ems"><h2>Call 911 if</h2>${list(card.callEms, 'pc-if')}</section>` : ''}
+        </div>
+      </div>
+
+      ${roles.length ? `<section class="pc-roles">${roles.map(([k, label]) =>
+        `<div><h3>${label}</h3><p>${esc(card[k])}</p></div>`).join('')}</section>` : ''}
+
+      <footer class="pc-foot">
+        ${profile.name ? `${esc(profile.name)}’s seizure action card, printed ${printDate(dayKey())}. ` : ''}Made with Synara.
+      </footer>
+    </article>`;
+}
+
+/* Ctrl+P, or Print in the browser's own menu, prints whatever is in
+   #print-card — which used to be empty until the button was pressed,
+   and stale after any edit. So it is filled from the live record on
+   every change and again just before printing. */
+function fillPrintCard(state = store.get()) {
+  const target = document.getElementById('print-card');
+  if (target) target.innerHTML = printMarkup(state);
+}
+store.subscribe(fillPrintCard);
+window.addEventListener('beforeprint', () => fillPrintCard());
+
+/* ============================================================
+   Editing
+   ============================================================ */
+
+const LIST_FIELDS = new Set(['during', 'doNot', 'after', 'callEms']);
+
+const FIELD_LABEL = {
+  looksLike: 'What their seizures look like',
+  during: 'What to do',
+  doNot: 'What NOT to do',
+  after: 'Afterwards',
+  callEms: 'Call 911 if…',
+  forTeacher: 'For teachers',
+  forNurse: 'For the school nurse',
+  forCoach: 'For coaches and PE',
+};
+
+const FIELD_HINT = {
+  looksLike: 'Plain words beat medical terms — a substitute teacher has to recognise this.',
+  forTeacher: 'What should happen in class? Who do they send for? Anything in a 504 plan?',
+  forNurse: 'Rescue medication, who to call after 911, where they like to recover.',
+  forCoach: 'Activity limits, water rules, whether they can return to play the same day.',
+};
+
+export const actions = {
+  'card-edit'(node, state) {
+    const field = node.dataset.field;
+    if (!FIELD_LABEL[field]) return;
+    const isList = LIST_FIELDS.has(field);
+    const value = state.card[field];
+    const text = isList ? (value || []).join('\n') : (value || '');
+
+    openSheet({
+      title: FIELD_LABEL[field],
+      body: html`
+        <div class="field">
+          <label class="label" for="card-text">
+            ${isList ? 'One step per line' : 'Write it the way you would say it out loud'}
+          </label>
+          <textarea class="textarea textarea-tall" id="card-text" name="text" maxlength="4000">${text}</textarea>
+          <span class="hint">
+            ${isList ? `Each line becomes one step on the card.${store.CORE_STEPS.has(field) ? ' Clear it all to go back to the standard steps.' : ''}` : (FIELD_HINT[field] || '')}
+          </span>
+        </div>
+      `,
+      footer: `<button class="btn btn-primary" data-action="card-save" data-field="${field}">Save</button>`,
+    });
+  },
+
+  async 'card-save'(node) {
+    const field = node.dataset.field;
+    if (!FIELD_LABEL[field]) return;
+    const text = sheetValues().text || '';
+    let value = LIST_FIELDS.has(field)
+      // People paste numbered lists; the card numbers them itself.
+      ? text.split('\n').map((l) => l.replace(/^\s*(\d+[.)]|[-*•])\s*/, '').trim()).filter(Boolean)
+      : text.trim();
+
+    // Cleared, "What to do", "What NOT to do" or "Call 911 if" would
+    // vanish from the emergency card without a word. Empty means the
+    // standard steps instead (store.CORE_STEPS), and the toast says so.
+    const restored = store.CORE_STEPS.has(field) && !value.length;
+    if (restored) value = store.defaultSteps(field);
+
+    await store.updateCard({ [field]: value });
+    closeSheet();
+    toast(restored ? 'The standard steps are back — the emergency card always needs these' : 'Safety card updated', 'ok');
+  },
+
+  'contact-open'(node, state) {
+    const id = node.dataset.id;
+    const existing = id ? state.contacts.find((c) => c.id === id) : null;
+    const c = existing || { name: '', relation: '', phone: '', primary: !state.contacts.length };
+    const idAttr = existing ? ` data-id="${existing.id}"` : '';
+
+    openSheet({
+      title: existing ? 'Edit contact' : 'Add contact',
+      body: html`
+        <form class="stack stack-5" data-action="contact-save"${raw(idAttr)} novalidate>
+          <div class="field">
+            <label class="label" for="c-name">Name</label>
+            <input class="input" id="c-name" name="name" value="${c.name}"
+                   placeholder="Dana Ellison" autocomplete="off" maxlength="120" required />
+          </div>
+          <div class="field">
+            <label class="label" for="c-rel">Relationship</label>
+            <input class="input" id="c-rel" name="relation" value="${c.relation}"
+                   placeholder="Mom, school nurse, coach…" autocomplete="off" maxlength="80" />
+          </div>
+          <div class="field">
+            <label class="label" for="c-phone">Phone</label>
+            <input class="input" id="c-phone" name="phone" type="tel" inputmode="tel" value="${c.phone}"
+                   placeholder="(555) 014-2007" autocomplete="off" maxlength="40" required />
+          </div>
+          <div class="card card-flush">
+            <label class="toggle-row">
+              <span class="row-body">
+                <span class="row-t">Call this person first</span>
+                <span class="row-s">They become the big green button on the emergency card</span>
+              </span>
+              <input type="checkbox" class="check" name="primary" ${raw(c.primary ? 'checked' : '')} />
+            </label>
+          </div>
+        </form>
+      `,
+      footer: `
+        ${existing ? `<button class="btn btn-danger-soft" data-action="contact-delete" data-id="${existing.id}">Delete</button>` : ''}
+        <button class="btn btn-primary" data-action="contact-save"${idAttr}>Save</button>
+      `,
+    });
+  },
+
+  async 'contact-save'(node) {
+    const id = node.dataset.id || null;
+    const v = sheetValues();
+    if (!v.name || !v.name.trim()) {
+      toast('A name is needed', 'bad');
+      return;
+    }
+    // A number nobody can dial is worse than none on an emergency card.
+    // Same test as the Call buttons, so an extension alone doesn't pass.
+    if (!dialable(v.phone)) {
+      toast('That phone number doesn\'t look complete', 'bad');
+      return;
+    }
+
+    const payload = { name: v.name, relation: v.relation || '', phone: v.phone, primary: !!v.primary };
+    if (id) await store.updateContact(id, payload);
+    else await store.addContact(payload);
+
+    closeSheet();
+    toast(id ? 'Contact updated' : 'Contact added', 'ok');
+  },
+
+  'contact-delete'(node) {
+    const id = node.dataset.id;
+    confirmSheet({
+      title: 'Delete this contact?',
+      message: 'They will be removed from the safety card, the emergency screen, and the printed card.',
+      async onConfirm() {
+        await store.removeContact(id);
+        toast('Contact deleted');
+      },
+    });
+  },
+
+  /* ---- Timer ---- */
+
+  'timer-start'() {
+    stoppedAfter = null;
+    startedStamp = stamp();
+    writeStart({ ms: Date.now(), at: startedStamp });
+    startTicking(emergencyEl());
+    emergencyEl().querySelector('[data-action="timer-stop"]')?.focus({ preventScroll: true });
+  },
+
+  /* Whoever starts the timer has usually arrived after the seizure began.
+     Each press moves the start back a minute, so the 5-minute line counts
+     from when it began. It stays where it is past 5:00 (Call 911 comes in
+     above the clock), so the log can say how long it really lasted. */
+  'timer-earlier'() {
+    const start = readStart();
+    if (!start) return;
+    const ms = start.ms - 60 * 1000;
+    writeStart({ ms, at: stamp(new Date(ms)) });
+    startTicking(emergencyEl());
+  },
+
+  'timer-stop'() {
+    const start = readStart();
+    stopTicking();
+    if (!start) return;
+    stoppedAfter = Math.max(1, Math.floor((Date.now() - start.ms) / 1000));
+    startedStamp = start.at;
+    writeStart(null);
+    setTimerView(emergencyEl(), 'stopped', stoppedAfter);
+    focusAfterStop(emergencyEl());
+  },
+
+  'timer-reset'() {
+    stoppedAfter = null;
+    startedStamp = null;
+    writeStart(null);
+    stopTicking();
+    const box = emergencyEl().querySelector('.em-timer');
+    if (box) box.outerHTML = timerMarkup();
+    emergencyEl().querySelector('[data-action="timer-start"]')?.focus({ preventScroll: true });
+  },
+
+  'timer-log'() {
+    const duration = stoppedAfter || 0;
+    const at = startedStamp || `${dayKey()}T${timeOf()}`;
+    stoppedAfter = null;
+    startedStamp = null;
+    closeEmergency();
+    logSeizure({ at, duration });
+  },
+
+  /* ---- Print ---- */
+
+  'print-card'(node, state) {
+    if (!document.getElementById('print-card')) return;
+    // Saved to an iPhone or iPad home screen, the app cannot print at
+    // all: print() silently does nothing. Say so instead.
+    const ua = navigator.userAgent;
+    const apple = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    const installed = window.navigator.standalone === true ||
+      window.matchMedia('(display-mode: standalone)').matches;
+    if (apple && installed) {
+      toast('To print, open this page in Safari. Home-screen apps can’t print on iPhone or iPad.', 'bad');
+      return;
+    }
+    fillPrintCard(state);
+    window.print();
+  },
+};

@@ -1,0 +1,582 @@
+import { test, expect } from '@playwright/test';
+import { gotoScenario } from './helpers';
+
+/** Pick a trend the way a student does: Change, then the trend in the panel. */
+async function pickTrend(page: import('@playwright/test').Page, id: string) {
+  await page.locator('.fpt-tcur').click();
+  await page.locator(`.fpt-tpanel .fpt-trow[data-c="${id}"]`).click();
+}
+
+
+/**
+ * The Flux Periodic Table on its own page (periodic.html). The chemistry is
+ * covered in test/unit/ptable-chem.test.mjs; these check the page a student
+ * uses: the tabs along the top — the plain table and what an element says
+ * when clicked, the trends and their graph, the temperature, and the tabs
+ * that go deeper into one element (electrons, spectra, isotopes, 3D).
+ */
+
+test.describe('Periodic table page', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 950 });
+  });
+
+  test('the tabs, in order, and the Table tab is just the table', async ({ page }) => {
+    await page.goto('/periodic.html');
+    await expect(page.locator('.fpt-view')).toHaveText(['Table', 'Trends', 'Temperature', 'Electrons', 'Spectra', 'Isotopes', '3D']);
+    await expect(page.locator('.fpt-view[data-view="table"]')).toHaveAttribute('aria-selected', 'true');
+    // No trend picker and no graph: those are the Trends tab's.
+    await expect(page.locator('.fpt-sel')).toBeHidden();
+    await expect(page.locator('.fpt-chart')).toBeHidden();
+    await expect(page.locator('.fpt-legend')).toContainText('Alkali metals');
+    await page.locator('.fpt-legend [data-act="tcolour"][data-c="block"]').click();
+    await expect(page.locator('.fpt-legend')).toContainText('d-block');
+  });
+
+  test('a link opens an element, and its panel shows the numbers', async ({ page }) => {
+    await page.goto('/periodic.html#Na');
+    const side = page.locator('.fpt-side');
+    await expect(side.locator('h2')).toHaveText('Sodium');
+    await expect(page.locator('.fpt-el[data-n="11"]')).toHaveClass(/is-sel/);
+    await expect(side).toContainText('[Ne] 3s¹');
+    await expect(side.locator('.fpt-bohr svg')).toBeVisible();
+
+    await side.locator('.fpt-dtab[data-tab="energy"]').click();
+    await expect(side).toContainText('496 kJ/mol');
+    // The jump after the first electron puts sodium in group 1.
+    await expect(side).toContainText('puts it in group 1');
+
+    // Arrow keys walk the table and keep the panel in step.
+    await page.locator('.fpt-el[data-n="11"]').focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(side.locator('h2')).toHaveText('Magnesium');
+    await expect(page).toHaveURL(/#Mg$/);
+
+    // The panel leads on to the deeper tabs, keeping the element.
+    await side.locator('.fpt-more [data-view="isotopes"]').click();
+    await expect(page.locator('.fpt-view[data-view="isotopes"]')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.fpx-head h2')).toHaveText('Magnesium');
+    await expect(page).toHaveURL(/#isotopes\/Mg$/);
+  });
+
+  test('colouring by a property writes the values and the trend', async ({ page }) => {
+    await page.goto('/periodic.html');
+    await page.locator('.fpt-view[data-view="trends"]').click();
+    await pickTrend(page, 'ie');
+    await expect(page.locator('.fpt-el[data-n="2"] .fpt-v')).toHaveText('2372');    // helium, highest
+    await expect(page.locator('.fpt-legend')).toContainText(/Across a period/);
+    await page.locator('.fpt-view[data-view="temp"]').click();
+    await page.locator('.fpt-chip[data-k="373.15"]').click();                        // water boils
+    await expect(page.locator('.fpt-el[data-n="35"] .fpt-v')).toHaveText('Gas');   // bromine boils at 59 °C
+    await expect(page.locator('.fpt-el[data-n="80"] .fpt-v')).toHaveText('Liquid'); // mercury does not
+    await expect(page.locator('.fpt-events')).toContainText('Next');
+  });
+
+  test('every trend has its scale, its direction and a graph against atomic number', async ({ page }) => {
+    await page.goto('/periodic.html#trend/ie');
+    const ids = await page.locator('.fpt-sel option').evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+    for (const id of ['rc', 'rv', 're', 'vol', 'z', 'zeff', 'shield', 'core', 'unpaired', 'ie', 'ie2', 'ie3', 'ea', 'en', 'enA', 'metal', 'mass', 'neutrons', 'd', 'mp', 'bp', 'liq']) {
+      expect(ids, `no "${id}" trend`).toContain(id);
+    }
+    // Categories, blocks and states have tabs of their own, not a place in the list.
+    for (const id of ['cat', 'block', 'state']) expect(ids).not.toContain(id);
+    await pickTrend(page, 'shield');
+    await expect(page.locator('.fpt-el[data-n="11"] .fpt-v')).toHaveText('8.80');      // sodium: σ = 11 − 2.20
+    await expect(page.locator('.fpt-legend')).toContainText(/Down a group/);
+    const chart = page.locator('.fpt-chart');
+    await expect(chart).toBeVisible();
+    await expect(chart.locator('.fpt-pt')).toHaveCount(118);
+    // A point on the graph opens its element.
+    await chart.locator('.fpt-pt[data-n="26"]').click();
+    await expect(page.locator('.fpt-side h2')).toHaveText('Iron');
+    await expect(page).toHaveURL(/#trend\/shield\/Fe$/);
+
+    // Metallic character runs the scale the other way: caesium is brightest.
+    await pickTrend(page, 'metal');
+    await expect(page.locator('.fpt-legend')).toContainText('most metallic');
+    // The Table tab has no graph.
+    await page.locator('.fpt-view[data-view="table"]').click();
+    await expect(chart).toBeHidden();
+  });
+
+  test('a trend link opens with that trend', async ({ page }) => {
+    await page.goto('/periodic.html#trend/rc/Cl');
+    await expect(page.locator('.fpt-sel')).toHaveValue('rc');
+    await expect(page.locator('.fpt-side h2')).toHaveText('Chlorine');
+    await expect(page.locator('.fpt-el[data-n="17"] .fpt-v')).toHaveText('102');
+  });
+
+  test('Electrons: chromium breaks the Aufbau order, and iron loses 4s first', async ({ page }) => {
+    await page.goto('/periodic.html#electrons/Cr');
+    const x = page.locator('.fpt-explore');
+    await expect(x.locator('.fpx-head h2')).toHaveText('Chromium');
+    await expect(x.locator('.fpx-warn')).toContainText('[Ar] 3d⁴ 4s²');
+    await expect(x.locator('.fpx-warn')).toContainText('[Ar] 3d⁵ 4s¹');
+    await expect(x).toContainText('6 — paramagnetic');
+    // Pick iron on the small table, then its 3+ ion.
+    await page.locator('.fpt-el[data-n="26"]').click();
+    await expect(page).toHaveURL(/#electrons\/Fe$/);
+    await x.locator('[data-act="xion"][data-q="3"]').click();
+    await expect(x.locator('.fpt-config-t')).toHaveText('[Ar] 3d⁵');
+    await expect(x.locator('.fpx-note')).toContainText('2 from 4s and 1 from 3d');
+  });
+
+  test('Spectra: hydrogen\'s lines, worked out from its energy levels', async ({ page }) => {
+    await page.goto('/periodic.html#spectra/H');
+    const x = page.locator('.fpt-explore');
+    await expect(x.locator('.fpt-spec').first()).toBeVisible();
+    // Balmer, n = 3 → 2: the red line.
+    await expect(x.locator('.fpx-result')).toContainText('656.5 nm');
+    await expect(x.locator('.fpx-result')).toContainText('182 kJ/mol');
+    // Lyman's convergence limit is hydrogen's ionization energy.
+    await x.locator('[data-act="hseries"][data-lo="1"]').click();
+    await x.locator('.fpx-uppers [data-hi="inf"]').click();
+    await expect(x.locator('.fpx-result')).toContainText('91.2 nm');
+    await expect(x).toContainText('1312 kJ/mol');
+  });
+
+  test('Isotopes: chlorine\'s mass spectrum, its Ar, and Cl₂', async ({ page }) => {
+    await page.goto('/periodic.html#isotopes/Cl');
+    const x = page.locator('.fpt-explore');
+    await expect(x.locator('.fpx-bar[data-mz="35"]').first()).toBeVisible();
+    await expect(x.locator('.fpx-bar[data-mz="37"]').first()).toBeVisible();
+    await expect(x.locator('.fpt-work')).toContainText('35.453');
+    for (const mz of ['70', '72', '74']) await expect(x.locator('.fpx-bar[data-mz="' + mz + '"]')).toHaveCount(1);
+    await expect(x).toContainText('9 : 6 : 1');
+  });
+
+  test('3D: any element, turned round, and its orbitals', async ({ page }) => {
+    await page.goto('/periodic.html#3d/Fe');
+    const x = page.locator('.fpt-explore');
+    await expect(x.locator('.fpx-key')).toContainText('26 protons + 30 neutrons');
+    await expect(x.locator('.fpx-key [data-hl]:not([data-hl="nuc"])')).toHaveCount(4);    // shells 2, 8, 14, 2
+    // Something is drawn on the canvas.
+    const painted = () => page.evaluate(() => {
+      const c = document.querySelector('.fpx-canvas') as HTMLCanvasElement;
+      const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4 * 17) if (d[i] > 0) n++;
+      return n;
+    });
+    await expect.poll(painted).toBeGreaterThan(200);
+    // Click carbon on the small table: the model rebuilds.
+    await page.locator('.fpt-el[data-n="6"]').click();
+    await expect(x.locator('.fpx-head h2')).toHaveText('Carbon');
+    await expect(x.locator('.fpx-key')).toContainText('Shell n = 2 · 4 electrons');
+    // Dragging turns it without breaking anything.
+    const box = (await x.locator('.fpx-canvas').boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 40, { steps: 5 });
+    await page.mouse.up();
+    // The orbitals: carbon's 2p has two electrons in two of its three orbitals.
+    await x.locator('[data-act="a3mode"][data-mode="orbitals"]').first().click();
+    await expect(x.locator('.fpx-subs [data-orb="2p"]')).toHaveClass(/is-on/);
+    await expect(x.locator('.fpx-krow')).toHaveText([/1 electron/, /1 electron/, /empty/]);
+  });
+
+  test('switching tabs slides one highlight to the tab chosen, and the page in after it', async ({ page }) => {
+    await page.goto('/periodic.html');
+    const glide = () => page.evaluate(() => {
+      const g = document.querySelector('.fpt-views-glide')!.getBoundingClientRect();
+      const on = document.querySelector('.fpt-view.is-on')!.getBoundingClientRect();
+      return { dx: Math.abs(g.left - on.left), dw: Math.abs(g.width - on.width), sliding: document.querySelector('.fpt-body')!.getAnimations().length };
+    });
+    await expect.poll(async () => (await glide()).dx).toBeLessThan(1);
+    await page.locator('.fpt-view[data-view="isotopes"]').click();
+    // The page comes in with an animation, and the highlight is on its way.
+    const t0 = await glide();
+    expect(t0.sliding, 'the page did not slide in').toBeGreaterThan(0);
+    expect(t0.dx, 'the highlight jumped instead of sliding').toBeGreaterThan(20);
+    // And it arrives, exactly under the tab.
+    await expect.poll(async () => { const g = await glide(); return g.dx + g.dw; }).toBeLessThan(1);
+  });
+
+  test('with reduced motion, tabs switch without moving', async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 950 }, reducedMotion: 'reduce' });
+    const page = await ctx.newPage();
+    await page.goto('/periodic.html');
+    await page.locator('.fpt-view[data-view="spectra"]').click();
+    const r = await page.evaluate(() => ({
+      anims: document.querySelector('.fpt-body')!.getAnimations().length,
+      dx: Math.abs(document.querySelector('.fpt-views-glide')!.getBoundingClientRect().left - document.querySelector('.fpt-view.is-on')!.getBoundingClientRect().left),
+    }));
+    expect(r.anims).toBe(0);
+    expect(r.dx).toBeLessThan(1);
+    await ctx.close();
+  });
+
+  test('fits a phone without the page scrolling sideways', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    for (const hash of ['#Fe', '#3d/C', '#spectra/H']) {
+      await page.goto('/periodic.html' + hash);
+      await page.waitForTimeout(300);
+      const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(over, `${hash}: the page is wider than the phone`).toBeLessThanOrEqual(0);
+    }
+  });
+
+  test('switching Overview and Energy leaves the page where it is', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/periodic.html#Fe');
+    // Safari focuses the nearest focusable box when a button is tapped; the
+    // whole table being one is what scrolled the page back up.
+    expect(await page.locator('.fpt').getAttribute('tabindex')).toBeNull();
+    const tabs = page.locator('.fpt-dtabs');
+    // Scrolled down, with the tabs in the middle of the screen.
+    await tabs.evaluate((el) => window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 300));
+    const before = await tabs.evaluate((el) => el.getBoundingClientRect().top);
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
+    await page.locator('.fpt-dtab[data-tab="energy"]').click();
+    await expect(page.locator('.fpt-dtab[data-tab="energy"]')).toHaveClass(/is-on/);
+    expect(Math.abs((await tabs.evaluate((el) => el.getBoundingClientRect().top)) - before)).toBeLessThan(2);
+    await page.locator('.fpt-dtab[data-tab="overview"]').click();
+    expect(Math.abs((await tabs.evaluate((el) => el.getBoundingClientRect().top)) - before)).toBeLessThan(2);
+  });
+
+  test('printing: colour or black and white, a key, the Flux mark, and no name cut short', async ({ page }) => {
+    await page.goto('/periodic.html');
+    await page.locator('#ptPrint').click();
+    const menu = page.locator('#ptPrintMenu');
+    await expect(menu).toBeVisible();
+    await menu.locator('[data-ink="bw"]').click();
+    await expect(page.locator('#ptPrintKey'), 'black and white has no colours for a key to name').toBeDisabled();
+    await menu.locator('[data-ink="colour"]').click();
+    await page.locator('#ptPrintKey').check();
+    expect(JSON.parse((await page.evaluate(() => localStorage.getItem('flux_ptable_print')))!)).toEqual({ ink: 'colour', key: true });
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+
+    // What the Print button prepares, then the page as the printer lays it out.
+    await page.evaluate(() => (window as any).fluxPeriodicPage.instance.setPrint({ ink: 'colour', key: true }));
+    await page.emulateMedia({ media: 'print' });
+    for (const size of [{ width: 979, height: 739 }, { width: 717, height: 1045 }]) {
+      await page.setViewportSize(size);
+      await expect(page.locator('.print-mark')).toBeVisible();
+      await expect(page.locator('.fpt-printkey')).toBeVisible();
+      await expect(page.locator('.fpt-printkey')).toContainText('Alkali metals');
+      await expect(page.locator('.fpt-printkey')).toContainText('Noble gases');
+      const cut = await page.evaluate(() => [...document.querySelectorAll('.fpt-el')].filter((el) => {
+        const r = el.querySelector('.fpt-nm')!.getBoundingClientRect(), c = el.getBoundingClientRect();
+        return r.left < c.left || r.right > c.right;
+      }).map((el) => el.getAttribute('aria-label')));
+      expect(cut, `${size.width}px page: names running out of their cells`).toEqual([]);
+    }
+    // Colour fills the cells; black and white leaves them white with no strip.
+    const fill = () => page.locator('.fpt-el[data-n="26"]').evaluate((el) => getComputedStyle(el).backgroundColor);
+    // Polled: the cells fade between colours.
+    await expect.poll(fill).not.toBe('rgb(255, 255, 255)');
+    await page.evaluate(() => (window as any).fluxPeriodicPage.instance.setPrint({ ink: 'bw', key: true }));
+    await expect.poll(fill).toBe('rgb(255, 255, 255)');
+    await expect(page.locator('.fpt-printkey'), 'no key in black and white').toBeHidden();
+  });
+});
+
+test.describe('Periodic table page: the diatomic elements', () => {
+  test('one tap lights up HOFBrINCl, says the trick, and each of the seven says it is found as X₂', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 950 });
+    await page.goto('/periodic.html');
+    const chip = page.locator('[data-act="diatomic"]');
+    await expect(chip).toContainText('HOFBrINCl');
+    await chip.click();
+    await expect(page.locator('.fpt-hlbar')).toContainText('7 diatomic elements');
+    await expect(page.locator('.fpt-mnemo')).toContainText('H₂, O₂, F₂, Br₂, I₂, N₂, Cl₂');
+    const lit = await page.evaluate(() => [...document.querySelectorAll('.fpt-el')].filter((c) => !c.classList.contains('is-dim')).map((c) => (c as HTMLElement).dataset.n).sort((a, b) => +a! - +b!));
+    expect(lit).toEqual(['1', '7', '8', '9', '17', '35', '53']);
+    await chip.click();
+    await expect(page.locator('.fpt-hlbar')).toHaveCount(0);
+    // Typing the trick finds them too.
+    await page.locator('.fpt-q').fill('hofbrincl');
+    await expect(page.locator('.fpt-sug').first()).toContainText('HOFBrINCl (diatomic)');
+    await page.locator('.fpt-q').fill('');
+    await page.locator('.fpt-el[data-n="35"]').click();
+    await expect(page.locator('.fpt-side')).toContainText('Br₂ · diatomic (HOFBrINCl)');
+    await page.locator('.fpt-el[data-n="6"]').click();
+    await expect(page.locator('.fpt-side')).not.toContainText('diatomic');
+  });
+});
+
+test.describe('Periodic table page: taps that must not move it, and paper', () => {
+  test('the ‹ › arrows change the element without moving the page, even if the browser scrolls on the tap', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/periodic.html#spectra/Fe');
+    await expect(page.locator('.fpt-view[data-view="spectra"]')).toHaveAttribute('aria-selected', 'true');
+    const arrow = () => page.locator('[data-act="step"][data-d="1"]').filter({ visible: true }).first();
+    // Scrolled down, with the arrow still on screen near the top.
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll('[data-act="step"][data-d="1"]')].find((x) => x.getBoundingClientRect().height) as HTMLElement;
+      window.scrollBy(0, b.getBoundingClientRect().top - 140);
+    });
+    const y0 = await page.evaluate(() => window.scrollY);
+    expect(y0).toBeGreaterThan(50);
+    /* Safari can scroll during a tap, to whatever it decides to focus.
+       Chromium never does, so a scroll between finger-down and the click
+       stands in for it (on pointerup, so the click still reaches the arrow). */
+    await page.evaluate(() => document.addEventListener('pointerup', () => window.scrollTo(0, 0), { capture: true, once: true }));
+    const box = (await arrow().boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await expect(page.locator('.fpx h2, .fpx-head h2').first()).toContainText('Cobalt');
+    await page.waitForTimeout(600);
+    expect(Math.abs((await page.evaluate(() => window.scrollY)) - y0), 'the page moved').toBeLessThan(3);
+  });
+
+  test('on paper: black numbers round the edge, one page, and no room for the browser\'s date line', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/periodic.html');
+    await page.emulateMedia({ media: 'print' });
+    const lbl = await page.evaluate(() => { const s = getComputedStyle(document.querySelector('.fpt-lbl')!); return { c: s.color, o: s.opacity }; });
+    expect(lbl).toEqual({ c: 'rgb(0, 0, 0)', o: '1' });
+    for (const landscape of [true, false]) {
+      const pdf = await page.pdf({ landscape, format: 'Letter', preferCSSPageSize: true });
+      const pages = (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+      expect(pages, (landscape ? 'landscape' : 'portrait') + ' printed a second page').toBe(1);
+    }
+    // @page margin 0 is what leaves the browser no margin to print its date and time in.
+    const zeroMargin = await page.evaluate(() => [...document.styleSheets].some((sh) => { try { return [...sh.cssRules].some((r) => r instanceof CSSPageRule && r.style.margin === '0px'); } catch (e) { return false; } }));
+    expect(zeroMargin).toBe(true);
+  });
+});
+
+/*
+ * "The periodic table is incredibly laggy." Three things were redrawing the
+ * screen behind it all the time, and each is pinned here:
+ *   · the standalone pages painted their glow as a fixed body background,
+ *     which Chrome repaints on every frame of scrolling;
+ *   · the planner's moving backdrop was a full-window canvas redrawn 24
+ *     times a second, reading a style off the page on every frame;
+ *   · Study tools ran twinkling stars and drifting lines behind the table.
+ * And the second time ("INCREDIBLY laggy right now", 2026-10-11):
+ *   · from 6pm to 6am the planner's whole main area sat under a filter, so
+ *     the browser redrew it off-screen on every frame anything in it moved;
+ *   · the aurora, the ambient wash, the logo's shimmer, the quick-add glow
+ *     and the backdrop canvas kept the whole screen recompositing behind
+ *     Study tools — they now hold still while it is open;
+ *   · every click repainted all 118 cells, and the Temperature slider did so
+ *     on every frame; now only the cells that change are touched.
+ */
+test.describe('Periodic table: nothing repaints the screen behind it', () => {
+  test('no page paints a fixed body background, signed in or not', async ({ page }) => {
+    const pages = ['periodic', 'composer', 'suite', 'flashcards', 'pixel', 'partners', 'grapher', 'calculator'];
+    const fixed = async () => {
+      const out: string[] = [];
+      for (const p of pages) {
+        await page.goto('/' + p + '.html');
+        if (await page.evaluate(() => getComputedStyle(document.body).backgroundAttachment.includes('fixed'))) out.push(p);
+      }
+      return out;
+    };
+    expect(await fixed(), 'signed out').toEqual([]);
+    await page.evaluate(() => {
+      localStorage.setItem('flux_theme', '"ember"');
+      localStorage.setItem('sb-test-auth-token', '{"x":1}');
+    });
+    expect(await fixed(), 'signed in, wearing the planner theme').toEqual([]);
+    // The glow is still there, on its own layer.
+    await page.goto('/periodic.html');
+    const glow = await page.evaluate(() => getComputedStyle(document.body, '::after').backgroundImage);
+    expect(glow).toContain('radial-gradient');
+  });
+
+  test('in the planner, the backdrop is small and Study tools runs no endless decorations', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoScenario(page, 'student-semester');
+    await page.evaluate(() => (window as unknown as { nav: (t: string) => void }).nav('toolbox'));
+    await page.evaluate(() => (window as any).fluxStudyHub.selectSubject('chemistry'));
+    await expect(page.locator('.fsh-ptable-host .fpt-el')).toHaveCount(118);
+    await page.waitForTimeout(600);
+    const r = await page.evaluate(() => {
+      const c = document.getElementById('fluxMeshCanvas') as HTMLCanvasElement | null;
+      const panel = document.getElementById('toolbox')!;
+      const endless = document.getAnimations()
+        .filter((a) => (a.effect as KeyframeEffect | null)?.target instanceof Element
+          && panel.contains((a.effect as KeyframeEffect).target as Element)
+          && a.effect!.getTiming().iterations === Infinity)
+        .map((a) => (a as CSSAnimation).animationName || 'animation');
+      return { canvas: c ? c.width * c.height : 0, window: innerWidth * innerHeight, endless };
+    });
+    if (r.canvas) expect(r.canvas, 'the backdrop canvas is drawn at full size').toBeLessThanOrEqual(r.window / 8);
+    expect(r.endless, 'endless animations behind the table').toEqual([]);
+  });
+
+  test('in the evening, nothing filters the planner\'s main area', async ({ page }) => {
+    await gotoScenario(page, 'student-semester');
+    // What the theme scheduler does from 6pm to 6am.
+    await page.evaluate(() => document.documentElement.setAttribute('data-flux-theme-time', 'night'));
+    const filter = await page.evaluate(() => getComputedStyle(document.querySelector('.main-content')!).filter);
+    expect(filter).toBe('none');
+  });
+
+  test('Study tools holds the background still, and it moves again after', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // Count what the backdrop canvas draws.
+    await page.addInitScript(() => {
+      const fill = CanvasRenderingContext2D.prototype.fillRect;
+      (window as any).__meshDraws = 0;
+      CanvasRenderingContext2D.prototype.fillRect = function (x: number, y: number, w: number, h: number) {
+        if (this.canvas && this.canvas.id === 'fluxMeshCanvas') (window as any).__meshDraws++;
+        return fill.call(this, x, y, w, h);
+      };
+    });
+    await gotoScenario(page, 'student-semester');
+    const nav = (t: string) => page.evaluate((x) => (window as unknown as { nav: (t: string) => void }).nav(x), t);
+    const watch = () => page.evaluate(async () => {
+      const w = window as any;
+      const before = w.__meshDraws;
+      await new Promise((r) => setTimeout(r, 700));
+      const running = document.getAnimations()
+        .filter((a) => a.playState === 'running' && a.effect!.getTiming().iterations === Infinity)
+        .map((a) => (a as CSSAnimation).animationName || 'animation');
+      return { still: document.documentElement.classList.contains('flux-tools-still'), draws: w.__meshDraws - before, running };
+    });
+    const hasCanvas = async () => (await page.locator('#fluxMeshCanvas').count()) > 0;
+
+    await nav('toolbox');
+    await page.evaluate(() => (window as any).fluxStudyHub.selectSubject('chemistry'));
+    await expect(page.locator('.fsh-ptable-host .fpt-el')).toHaveCount(118);
+    const inTools = await watch();
+    expect(inTools.still).toBe(true);
+    expect(inTools.draws, 'the backdrop redrawn behind the table').toBe(0);
+    expect(inTools.running, 'endless animations anywhere on the screen').toEqual([]);
+
+    await nav('dashboard');
+    const after = await watch();
+    expect(after.still).toBe(false);
+    if (await hasCanvas()) expect(after.draws, 'the backdrop drifts again').toBeGreaterThan(0);
+  });
+
+  test('picking an element, or moving the temperature, touches only the cells that change', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 950 });
+    const watch = () => page.evaluate(() => {
+      const w = window as any;
+      w.__touched = new Set<number>();
+      if (w.__mo) w.__mo.disconnect();
+      w.__mo = new MutationObserver((recs) => recs.forEach((r) => {
+        const el = (r.target instanceof Element ? r.target : r.target.parentElement)?.closest('.fpt-el') as HTMLElement | null;
+        if (el) w.__touched.add(+el.dataset.n!);
+      }));
+      w.__mo.observe(document.querySelector('#ptHost .fpt-grid')!, { subtree: true, childList: true, attributes: true, characterData: true });
+    });
+    const touched = () => page.evaluate(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      return ([...(window as any).__touched] as number[]).sort((a, b) => a - b);
+    });
+
+    await page.goto('/periodic.html');
+    await page.locator('#ptHost .fpt-el[data-n="26"]').click();
+    await watch();
+    await page.locator('#ptHost .fpt-el[data-n="8"]').click();
+    expect(await touched(), 'iron lets go, oxygen is picked, nothing else').toEqual([8, 26]);
+
+    await page.goto('/periodic.html#temperature');
+    await expect(page.locator('.fpt-range')).toBeVisible();
+    await watch();
+    // 298 K to 303 K: caesium (301.6 K) and gallium (302.9 K) melt.
+    await page.locator('.fpt-range').focus();
+    for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
+    await expect(page.locator('.fpt-temp-v')).toContainText('303 K');
+    const t = await touched();
+    expect(t).toEqual(expect.arrayContaining([31, 55]));
+    expect(t.length, 'cells rewritten for a 5-degree step').toBeLessThanOrEqual(4);
+  });
+});
+
+/**
+ * Round 3 of the lag work, and what came with it:
+ *   · in the planner, styles.css gives every button `transition: all .12s
+ *     !important`, so each click started transitions on every property of all
+ *     118 cells (scrollbar colour included) and restyled the table for frames
+ *     on end. The cells now name the few properties they fade;
+ *   · picking an element on the Trends tab moves the graph's marker instead of
+ *     rebuilding the whole graph;
+ *   · shell order ⇄ filling order rewrites only the configuration's text.
+ */
+test.describe('Periodic table, round 3', () => {
+  test.beforeEach(async ({ page }) => { await page.setViewportSize({ width: 1440, height: 950 }); });
+
+  test('in Study tools, a cell fades only its own few properties, never "all"', async ({ page }) => {
+    await gotoScenario(page, 'student-semester');
+    await page.evaluate(() => (window as any).nav('toolbox'));
+    await page.evaluate(() => (window as any).fluxStudyHub.selectSubject('chemistry'));
+    const cell = page.locator('.fsh-ptable-host .fpt-el[data-n="30"]');
+    await expect(cell).toBeVisible();
+    const props = await cell.evaluate((el) => getComputedStyle(el).transitionProperty);
+    expect(props).not.toContain('all');
+    expect(props).not.toContain('color,');
+    expect(props).toContain('background-color');
+  });
+
+  test('picking on the Trends tab moves the graph marker without rebuilding the graph', async ({ page }) => {
+    await page.goto('/periodic.html#trend/ie');
+    const svg = page.locator('.fpt-chart svg');
+    await expect(svg).toBeVisible();
+    await svg.evaluate((el) => { (el as any).__same = true; });
+    await page.locator('.fpt-el[data-n="8"]').click();
+    await expect(page.locator('.fpt-pt.is-sel')).toHaveAttribute('data-n', '8');
+    await expect(page.locator('.fpt-clab')).toHaveText(/^O 1314/);
+    await page.locator('.fpt-el[data-n="2"]').click();
+    await expect(page.locator('.fpt-pt.is-sel')).toHaveCount(1);
+    await expect(page.locator('.fpt-pt.is-sel')).toHaveAttribute('data-n', '2');
+    expect(await page.locator('.fpt-chart svg').evaluate((el) => (el as any).__same)).toBe(true);
+  });
+
+  test('shell order and filling order swap in place', async ({ page }) => {
+    await page.goto('/periodic.html#electrons/Fe');
+    const levels = page.locator('.fpx-levels');
+    await expect(levels).toBeVisible();
+    await levels.evaluate((el) => { (el as any).__same = true; });
+    const btn = page.locator('[data-act="order"]');
+    const shell = await page.locator('.fpt-config-f').textContent();
+    await btn.click();
+    await expect(btn).toHaveText('Show in shell order');
+    const fill = await page.locator('.fpt-config-f').textContent();
+    expect(fill).not.toBe(shell);
+    expect(fill).toMatch(/4s² 3d⁶$/);
+    await btn.click();
+    await expect(page.locator('.fpt-config-f')).toHaveText(shell!);
+    expect(await levels.evaluate((el) => (el as any).__same), 'the diagram was not rebuilt').toBe(true);
+  });
+
+  test('3D: how each element was discovered sits under the model', async ({ page }) => {
+    await page.goto('/periodic.html#3d/P');
+    const hist = page.locator('.fpx-hist');
+    await expect(hist).toContainText('Hennig Brand');
+    await expect(hist).toContainText('1669');
+    await expect(hist).toContainText('Hamburg');
+    await page.locator('.fpt-el[data-n="118"]').click();
+    await expect(hist).toContainText('Dubna');
+    const all = await page.evaluate(() => {
+      const H = (window as any).FluxPTableHistory;
+      const out: number[] = [];
+      for (let n = 1; n <= 118; n++) { const h = H[n]; if (!h || !h.who || !h.when || !h.where || !h.how) out.push(n); }
+      return out;
+    });
+    expect(all, 'elements with no who, when, where or how').toEqual([]);
+  });
+
+  test('Trends: one bar, a panel to change it, search and pinned favourites', async ({ page }) => {
+    await page.goto('/periodic.html#trend/ie');
+    const pick = page.locator('.fpt-tpick');
+    await expect(pick).toBeVisible();
+    await expect(pick.locator('.fpt-tcur-n')).toHaveText('First ionization energy');
+    await expect(pick.locator('.fpt-tpanel')).toBeHidden();
+    await expect(page.locator('.fpt-sel')).toBeHidden();   // the bar does that job here
+    await pick.locator('.fpt-tcur').click();
+    await expect(pick.locator('.fpt-tpanel')).toBeVisible();
+    await expect(pick.locator('.fpt-tq')).toBeFocused();
+    await expect(pick.locator('.fpt-tgrp[data-g="Size"] .fpt-tchip')).toHaveCount(4);
+    await expect(pick.locator('.fpt-tchip[data-id="rc"] .fpt-trow-d')).toHaveText('Across ↓ · Down ↑');
+    await pick.locator('.fpt-tq').fill('melting');
+    await expect(pick.locator('.fpt-tchip:visible .fpt-trow-n')).toHaveText(['Melting point']);
+    await pick.locator('.fpt-tq').press('Enter');
+    await expect(pick.locator('.fpt-tpanel')).toBeHidden();
+    await expect(page.locator('.fpt-sel')).toHaveValue('mp');
+    await expect(page.locator('.fpt-keyh')).toContainText('Melting point');
+    await pick.locator('.fpt-tcur').click();
+    await pick.locator('.fpt-tpin[data-c="mp"]').click();
+    await page.keyboard.press('Escape');
+    await expect(pick.locator('.fpt-tpanel')).toBeHidden();
+    await expect(pick.locator('.fpt-tpins .fpt-tbtn')).toContainText(['Melting point']);
+    await page.reload();
+    await expect(page.locator('.fpt-tpins .fpt-tbtn')).toContainText(['Melting point']);
+  });
+});

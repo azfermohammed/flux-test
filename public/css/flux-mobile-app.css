@@ -1,0 +1,2524 @@
+/* ════════════════════════════════════════════════════════════════
+   FLUX MOBILE WEB CSS
+   Safe-area handling, bottom-sheet "More" overlay, mobile polish.
+   Loaded everywhere; mobile-only rules are gated by media queries.
+   ════════════════════════════════════════════════════════════════ */
+
+/* Safe-area variables (read on iOS Safari standalone / Add to Home Screen) */
+:root{
+  --sa-top: env(safe-area-inset-top, 0px);
+  --sa-bottom: env(safe-area-inset-bottom, 0px);
+  --sa-left: env(safe-area-inset-left, 0px);
+  --sa-right: env(safe-area-inset-right, 0px);
+  --bnav-height: 62px;
+  --topbar-mob-height: 54px;
+  /* The nav's own bottom padding. Padding by the full --sa-bottom (34px on a
+     notched iPhone) left the icons floating that far up the bar with an empty
+     strip underneath them. A little over half still keeps the tap targets off
+     the home indicator without the gap reading as dead space. */
+  --bnav-pad-bottom: max(8px, calc(var(--sa-bottom) * .55));
+  /* Total height the fixed nav occupies. Anything that must sit above the nav
+     measures from this — never from --bnav-height alone, which omits the
+     safe-area padding. */
+  --bnav-total: calc(var(--bnav-height) + var(--bnav-pad-bottom));
+  /* The ONE bottom padding that clears the nav. It belongs to the content
+     column (.panel) and nowhere else. body and #app used to carry their own
+     copies, so every tab reserved the nav's height two or three times over and
+     scrolled into ~120px of empty page — worst on Flux AI, whose panel is
+     height-locked, so #app's copy was pure scrollable nothing. */
+  --flux-nav-clearance: calc(var(--bnav-total) + 18px);
+  /* B2 floating-dock contract: every fixed bottom-corner widget (toasts,
+     pills, fabs) offsets by this so nothing overlaps .bnav, sheets, or the
+     composer. Overridden inside the mobile media query below. */
+  --flux-dock-clearance: 20px;
+}
+
+/* Mobile-only safe-area + nav-clearance */
+@media (max-width: 768px){
+  :root{
+    --flux-dock-clearance: calc(var(--bnav-total) + 12px);
+  }
+  .topbar{
+    padding-top: max(8px, var(--sa-top));
+  }
+  .bottom-nav{
+    padding-bottom: var(--bnav-pad-bottom);
+  }
+  body{
+    /* .panel carries --flux-nav-clearance. body must stay at 0 or the nav's
+       height gets reserved a second time and the page scrolls into blank
+       space below the last card. */
+    padding-bottom: 0;
+  }
+  /* When .irow.modal-labeled-row stacks to column on mobile, the inline
+     `flex:0 1 140px` on column children (e.g. taskEstTime) gets interpreted
+     as a 140px height — leaving a huge empty gap under short fields like
+     "Est. time" before the next field starts. Force auto height so the
+     column collapses to content. */
+  .irow.modal-labeled-row > div{
+    flex-basis: auto !important;
+    height: auto !important;
+  }
+}
+
+/* Better tap behavior on phones */
+@media (max-width: 768px){
+  body{
+    -webkit-tap-highlight-color: transparent;
+  }
+  .bnav-item, .more-sheet-item, .nav-item, .task-action-btn, .btn-icon{
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Prevent rubber-band scroll inside the chat panel */
+  #aiMsgsWrap{
+    overscroll-behavior: contain;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   "MORE" BOTTOM SHEET (mobile only)
+   Slides up from the bottom and presents School Info, Canvas, Notes,
+   Time, Mood, Goals, Profile and Settings as a tap grid.
+   ════════════════════════════════════════════════════════════════ */
+.more-sheet-overlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(2,5,12,.74);
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+  backdrop-filter: blur(8px) saturate(140%);
+  z-index: var(--flux-z-more-sheet-back);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s ease;
+}
+.more-sheet-overlay.open{ opacity: 1; pointer-events: auto; }
+
+.more-sheet{
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: var(--flux-z-more-sheet-front);
+  /* Fully opaque so page content never bleeds through the sheet (the old
+     translucent gradient relied on backdrop-filter and looked broken when it
+     wasn't applied). */
+  background: linear-gradient(180deg, #161c2c 0%, #0a0e18 100%);
+  border-top: 1px solid rgba(var(--accent-rgb),.18);
+  border-radius: 22px 22px 0 0;
+  padding: 14px 18px calc(28px + var(--sa-bottom));
+  box-shadow: 0 -24px 64px rgba(0,0,0,.6), 0 -1px 0 rgba(255,255,255,.06) inset;
+  transform: translateY(110%);
+  transition: transform .28s cubic-bezier(.2,.85,.3,1);
+  max-height: 88vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.more-sheet.open{ transform: translateY(0); }
+[data-theme="light"] .more-sheet{ background: linear-gradient(180deg,#ffffff 0%,#eef2fa 100%); border-top-color: rgba(0,0,0,.08); }
+[data-theme="light"] .more-sheet-overlay{ background: rgba(15,22,38,.42); }
+
+.more-sheet-head{
+  position: sticky; top: 0;
+  background: transparent;
+  padding-top: 2px;
+  margin-bottom: 10px;
+}
+.more-sheet-handle{
+  width: 42px; height: 4px;
+  background: rgba(255,255,255,.18);
+  border-radius: 99px;
+  margin: 0 auto 10px;
+}
+.more-sheet-title-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 4px 6px;
+}
+.more-sheet-title{
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -.015em;
+  color: var(--text);
+  margin: 0;
+}
+.more-sheet-close{
+  width: 34px; height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.04);
+  color: var(--text);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform .14s ease, background .14s ease;
+  padding: 0;
+}
+.more-sheet-close:active{ transform: scale(.92); background: rgba(255,255,255,.08); }
+[data-theme="light"] .more-sheet-close{
+  border-color: rgba(0,0,0,.08);
+  background: rgba(0,0,0,.03);
+}
+[data-theme="light"] .more-sheet-close:active{ background: rgba(0,0,0,.06); }
+
+.more-sheet-grid{
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.more-sheet-item{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.07);
+  background: rgba(255,255,255,.03);
+  color: var(--text);
+  font-size: .78rem;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  transition: transform .14s ease, background .14s ease, border-color .14s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.more-sheet-item:active{
+  transform: scale(.96);
+  background: rgba(var(--accent-rgb),.12);
+  border-color: rgba(var(--accent-rgb),.28);
+}
+.more-sheet-icon{
+  font-size: 1.45rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.6em;
+  color: var(--text);
+}
+.more-sheet-icon .ms-svg-wrap{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+.more-sheet-icon > svg,
+.more-sheet-icon .ms-svg-wrap svg.nt-svg{
+  width: 26px;
+  height: 26px;
+  display: block;
+  color: currentColor;
+}
+.more-sheet-item:active .more-sheet-icon .nt-svg{ opacity: 0.95; }
+.nav-item.active .ni-svg-wrap .nt-svg,
+.bnav-item.active .bni .nt-svg{ color: currentColor; }
+.more-sheet-label{
+  font-size: .76rem;
+  letter-spacing: -.005em;
+  opacity: .92;
+}
+
+.more-sheet-section{
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255,255,255,.06);
+}
+.more-sheet-section-title{
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 10px 4px;
+}
+
+.more-sheet-row{
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 10px;
+  border-radius: 12px;
+  background: rgba(255,255,255,.03);
+  margin-bottom: 8px;
+  border: 0;
+  width: 100%;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.more-sheet-row:active{ background: rgba(255,255,255,.06); }
+.more-sheet-row .lbl{ flex: 1; font-size: .88rem; font-weight: 600; }
+
+/* Light theme adjustments for the bottom sheet */
+[data-theme="light"] .more-sheet{
+  background: linear-gradient(180deg, rgba(255,255,255,.98) 0%, rgba(248,250,252,.99) 100%);
+  border-top-color: rgba(0,0,0,.08);
+}
+[data-theme="light"] .more-sheet-handle{ background: rgba(0,0,0,.18); }
+[data-theme="light"] .more-sheet-item{
+  background: rgba(0,0,0,.02);
+  border-color: rgba(0,0,0,.07);
+}
+[data-theme="light"] .more-sheet-section{ border-top-color: rgba(0,0,0,.07); }
+[data-theme="light"] .more-sheet-row{ background: rgba(0,0,0,.02); }
+[data-theme="light"] .more-sheet-row:active{ background: rgba(0,0,0,.05); }
+[data-theme="light"] .more-sheet-overlay{ background: rgba(0,0,0,.35); }
+
+/* Hide the bottom sheet completely on tablet/desktop */
+@media (min-width: 769px){
+  .more-sheet,
+  .more-sheet-overlay{ display: none !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MOBILE TOP BAR (≤768px)
+   Left: lemniscate mark + "Flux" gradient wordmark.
+   Right: panic pill (when active) + avatar chip.
+   Desktop topbar structure is hidden on mobile via .topbar-desktop-only.
+   ════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px){
+  .topbar{
+    min-height: calc(var(--topbar-mob-height) + var(--sa-top)) !important;
+    padding: max(var(--sa-top), 8px) max(14px, var(--sa-left)) 10px max(14px, var(--sa-right)) !important;
+    background: color-mix(in srgb, var(--card) 72%, transparent) !important;
+    -webkit-backdrop-filter: blur(18px) saturate(160%) !important;
+    backdrop-filter: blur(18px) saturate(160%) !important;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    gap: 10px;
+  }
+  .topbar-desktop-only{ display: none !important; }
+  /* Same control as desktop "＋ New task", shown only ≤768px (desktop cluster is hidden). */
+  .topbar-mob-only.topbar-new-task-btn{
+    display: inline-flex !important;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .topbar-mob-brand{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+    color: var(--text);
+    -webkit-tap-highlight-color: transparent;
+    cursor: pointer;
+    border: 0;
+    background: transparent;
+    padding: 4px 6px;
+    border-radius: 12px;
+    user-select: none;
+  }
+  .topbar-mob-brand:active{ background: rgba(255,255,255,.04); }
+  .topbar-mob-brand-mark{
+    width: 28px; height: 28px;
+    flex-shrink: 0;
+    display: block;
+  }
+  .topbar-mob-brand-text{
+    font-weight: 800;
+    font-size: 1.02rem;
+    letter-spacing: -.015em;
+    background: linear-gradient(95deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 55%, #7C5CFF 45%) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    line-height: 1;
+  }
+  .topbar-mob-av{
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(var(--accent-rgb),.25), rgba(124,92,255,.25));
+    border: 1px solid rgba(255,255,255,.12);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: .8rem;
+    font-weight: 700;
+    color: var(--text);
+    flex-shrink: 0;
+    overflow: hidden;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .14s ease;
+    padding: 0;
+  }
+  .topbar-mob-av:active{ transform: scale(.94); }
+  .topbar-mob-av img{ width: 100%; height: 100%; object-fit: cover; display: block; }
+}
+/* Show mobile brand only on mobile; hide on desktop/tablet */
+@media (min-width: 769px){
+  .topbar-mob-brand,
+  .topbar-mob-av,
+  .topbar-mob-only{ display: none !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   BOTTOM NAV (mobile ≤768px) — 5 icon-only tabs with accent pill on active.
+   Works alongside styles.css baseline; supersedes older !important overrides.
+   ════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px){
+  .bottom-nav{
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: var(--bnav-height) !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    padding: 6px max(10px, var(--sa-left)) var(--bnav-pad-bottom) max(10px, var(--sa-right)) !important;
+    background: color-mix(in srgb, var(--card) 78%, transparent) !important;
+    -webkit-backdrop-filter: blur(22px) saturate(170%) !important;
+    backdrop-filter: blur(22px) saturate(170%) !important;
+    border-top: 1px solid rgba(255,255,255,.06) !important;
+    border-bottom: none !important;
+    box-shadow: 0 -1px 0 rgba(255,255,255,.02), 0 -14px 44px rgba(0,0,0,.38), 0 0 36px rgba(var(--accent-rgb),.06) !important;
+    border-top: 1px solid rgba(var(--accent-rgb),.1) !important;
+    display: flex !important;
+    align-items: stretch;
+    gap: 2px;
+    z-index: var(--flux-z-mobile-bnav-elevated);
+  }
+  [data-theme="light"] .bottom-nav{ border-top-color: rgba(0,0,0,.06) !important; }
+
+  .bnav-item{
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    min-height: 50px !important;
+    padding: 8px 6px !important;
+    margin: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    color: var(--muted2) !important;
+    font-size: 0 !important; /* hide any stray label text on mobile */
+    letter-spacing: 0 !important;
+    gap: 0 !important;
+    border-radius: 16px !important;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .16s ease, color .16s ease, background .16s ease !important;
+    position: relative;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+  .bnav-item:active{ transform: scale(.92); }
+  .bnav-item .bni{
+    font-size: 1.4rem !important;
+    line-height: 1 !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px; height: 28px;
+    border-radius: 999px;
+    transition: background .18s ease, color .18s ease, transform .18s cubic-bezier(.2,.85,.3,1.2);
+    filter: none !important;
+  }
+  .bnav-item .bni svg{ width: 22px; height: 22px; display: block; }
+  .bnav-item .bnl{ /* accessible label, hidden visually */
+    position: absolute !important;
+    width: 1px !important; height: 1px !important;
+    padding: 0 !important; margin: -1px !important;
+    overflow: hidden !important; clip: rect(0,0,0,0);
+    white-space: nowrap !important; border: 0 !important;
+  }
+  .bnav-item.active{ color: var(--accent) !important; background: transparent !important; box-shadow: none !important; }
+  .bnav-item.active .bni{
+    background: rgba(var(--accent-rgb),.16);
+    color: var(--accent);
+    transform: translateY(-1px) scale(1.04);
+  }
+  .bnav-item.active .bni svg{ filter: drop-shadow(0 0 6px rgba(var(--accent-rgb),.35)); }
+
+  /* Unread / attention dot (used by panic mode on Home tab) */
+  .bnav-item .bnav-dot{
+    position: absolute;
+    top: 6px; right: 28%;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #ff4f5e;
+    box-shadow: 0 0 0 2px var(--card);
+    pointer-events: none;
+    display: none;
+  }
+  .bnav-item.has-alert .bnav-dot{ display: block; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MOBILE DASHBOARD LAYOUT (≤768px) — rebuilt per spec:
+   greeting + date + A/B pill, 4 stat chips, Do This Now card,
+   compact "Up next" list (up to 5),
+   workload chart, panic banner, and the full Tasks workspace (same as desktop).
+   ════════════════════════════════════════════════════════════════ */
+.dash-mob-date-row,
+.dash-mob-stack{ display: none; }
+
+@media (max-width: 768px){
+  /* Tighten dashboard horizontal padding on mobile to 16px per spec */
+  #dashboard.dash-v2{ padding-left: max(16px, var(--sa-left)) !important; padding-right: max(16px, var(--sa-right)) !important; }
+
+  /* The date strip stays. It adds a date; it is not a second copy of
+     something the desktop already shows. */
+  .dash-mob-date-row{ display: flex !important; align-items: center; gap: 10px; margin: 6px 0 2px; }
+
+  /* ── The phone shows the same dashboard as the laptop ──────────────────
+     .dash-mob-stack is deliberately NOT shown any more.
+
+     It was a parallel dashboard: its own "Do this now" hero, its own four
+     stat circles, its own "Up next" list. None of that existed on desktop,
+     and the widgets that did exist were hidden to make room for it — so the
+     two were never a wide and a narrow version of one screen, they were two
+     different screens sharing a URL. That is what "it looks like a separate
+     app" actually meant, and no amount of restyling fixes it while the phone
+     renders different components.
+
+     It duplicated what sat directly beneath it, too: "Up next" listed the
+     same tasks as #taskList, and the stat circles counted the same tasks as
+     the filter chips.
+
+     The markup stays in index.html rather than being deleted. It is wired to
+     live ids — dashMobDoNowTitle, dashMobStatTasks, dashMobTodayList — that
+     app.js writes on every dashboard render (app.js:4452, 4483, 4521), and
+     pulling the nodes out before that code is untangled would mean silent
+     null-writes on a hot path. The base rule above
+     (.dash-mob-stack{display:none}) now applies at every width, so it renders
+     nowhere and those writes land on detached-but-real elements.
+
+     The countdown card set the precedent: it was on the hide-list below and
+     came off after measuring, because hiding it "made the phone differ from
+     the laptop for no gain". The same reasoning retires the rest of the list.
+
+     What the phone gets instead is the desktop dashboard reflowed: greeting,
+     runway chip, exam countdown, class schedule, subject-health gauges, and
+     the full Tasks workspace including its Active / Today / Overdue filters —
+     that last one was hidden, which is why the phone had no way to see
+     overdue work at all. */
+
+  /* Date + A/B pill strip below greeting */
+  .dash-mob-date{
+    font-size: .82rem;
+    font-weight: 500;
+    color: var(--muted);
+    letter-spacing: -.01em;
+  }
+  .dash-mob-ab-pill{
+    margin-left: auto;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: .68rem;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    background: rgba(var(--accent-rgb),.14);
+    color: var(--accent);
+    border: 1px solid rgba(var(--accent-rgb),.26);
+  }
+
+  /* Stats chips row (horizontal scroll, no wrap) */
+  .dash-mob-stats{
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    overflow-x: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+    margin: 0 -4px;
+    padding-left: 4px;
+    padding-right: 4px;
+    scroll-padding-inline: 4px;
+    scroll-snap-type: x proximity;
+  }
+  .dash-mob-stats::-webkit-scrollbar{ display: none; }
+  .dash-mob-stat{
+    /* Was flex:0 0 auto with min-width:84 + 14px padding → 4 stats overflowed
+       a 375px viewport so HIGH got clipped on the right edge. Allow stats to
+       shrink to fit so all 4 are visible at the default scroll position. */
+    flex: 1 1 0;
+    min-width: 0;
+    display: inline-flex;
+    flex-direction: column;
+    /* Centred, not flex-start. These are equal-width capsules, so a one-digit
+       count left-aligned in an 80px pill sat ~20px off the middle and read as
+       a layout bug — most obvious on Tasks/Done/Overdue/High side by side. */
+    align-items: center;
+    text-align: center;
+    justify-content: center;
+    padding: 9px 12px;
+    border-radius: 999px;
+    background: rgba(var(--accent-rgb),.08);
+    border: 1px solid rgba(var(--accent-rgb),.18);
+    scroll-snap-align: start;
+    user-select: none;
+  }
+  .dash-mob-stat-num{
+    font-size: 1.15rem;
+    font-weight: 800;
+    line-height: 1.05;
+    color: var(--text);
+    letter-spacing: -.015em;
+  }
+  .dash-mob-stat-lbl{
+    font-size: .64rem;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted2);
+    margin-top: 2px;
+  }
+  .dash-mob-stat[data-kind="overdue"]{
+    background: rgba(255,79,94,.1);
+    border-color: rgba(255,79,94,.25);
+  }
+  .dash-mob-stat[data-kind="overdue"] .dash-mob-stat-num{ color: #ff4f5e; }
+  .dash-mob-stat[data-kind="done"]{
+    background: rgba(34,255,136,.09);
+    border-color: rgba(34,255,136,.22);
+  }
+  .dash-mob-stat[data-kind="done"] .dash-mob-stat-num{ color: #22ff88; }
+  .dash-mob-stat[data-kind="high"]{
+    background: rgba(255,176,64,.1);
+    border-color: rgba(255,176,64,.24);
+  }
+  .dash-mob-stat[data-kind="high"] .dash-mob-stat-num{ color: #ffb040; }
+
+  /* The three colours above are hardcoded neon, picked against a near-black
+     dashboard. On the light theme they sit on their own pale tint of the same
+     hue and stop being readable: Done measured 1.14:1, High 1.53:1, Overdue
+     2.54:1, where 4.5:1 is the minimum for text this size. The theme already
+     ships accessible equivalents — --green #1a7f37, --gold #9a6700, --red
+     #cf222e — so light borrows those. Dark is deliberately left as-is rather
+     than also switched to the variables: nothing is wrong with it, and it is
+     what everyone is actually looking at. */
+  [data-theme="light"] .dash-mob-stat[data-kind="overdue"] .dash-mob-stat-num{ color: var(--red); }
+  [data-theme="light"] .dash-mob-stat[data-kind="done"] .dash-mob-stat-num{ color: var(--green); }
+  [data-theme="light"] .dash-mob-stat[data-kind="high"] .dash-mob-stat-num{ color: var(--gold); }
+
+  /* Do This Now card — thick left accent border, big prominent */
+  .dash-mob-donow{
+    position: relative;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--card) 88%, transparent), var(--card));
+    border: 1px solid rgba(255,255,255,.06);
+    border-left: 4px solid var(--accent);
+    border-radius: 16px;
+    padding: 14px 16px 16px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.22), 0 0 0 1px rgba(var(--accent-rgb),.04) inset;
+  }
+  .dash-mob-donow-kicker{
+    font-size: .62rem;
+    font-weight: 800;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  .dash-mob-donow-title{
+    font-size: 1.02rem;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -.015em;
+    line-height: 1.3;
+    margin-bottom: 6px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .dash-mob-donow-meta{
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    font-size: .76rem;
+    color: var(--muted);
+  }
+  .dash-mob-donow-meta .mob-meta-chip{
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.07);
+    font-size: .7rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .dash-mob-donow-cta{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 18px;
+    min-height: 44px;
+    border-radius: 12px;
+    border: 0;
+    background: var(--accent);
+    color: #000;
+    font-size: .88rem;
+    font-weight: 800;
+    letter-spacing: -.005em;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .14s ease;
+  }
+  .dash-mob-donow-cta:active{ transform: scale(.96); }
+  .dash-mob-donow-empty{
+    background: rgba(255,255,255,.03);
+    border: 1px dashed rgba(255,255,255,.09);
+    border-radius: 14px;
+    padding: 14px 16px;
+  }
+  .dash-mob-empty-copy{ color: var(--muted); font-size: .86rem; margin-top: 4px; }
+  [data-theme="light"] .dash-mob-donow{ background: rgba(255,255,255,.98); border-color: rgba(0,0,0,.06); }
+  [data-theme="light"] .dash-mob-donow-empty{ background: rgba(0,0,0,.02); border-color: rgba(0,0,0,.08); }
+
+  .dash-mob-today{ margin-top: 2px; }
+  .dash-mob-today-head{
+    display: flex; align-items: center; justify-content: flex-start;
+    margin-bottom: 8px; padding: 0 2px;
+  }
+  .dash-mob-today-title{
+    font-size: .82rem; font-weight: 800; letter-spacing: -.005em;
+    color: var(--text); text-transform: none;
+  }
+  .dash-mob-today-count{
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 8px;
+    font-size: .7rem;
+    font-weight: 700;
+    color: var(--muted2);
+    background: rgba(255,255,255,.05);
+    border-radius: 999px;
+  }
+  .dash-mob-today-list{
+    display: flex; flex-direction: column; gap: 6px;
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  [data-theme="light"] .dash-mob-today-list{ background: #fff; border-color: rgba(0,0,0,.06); }
+
+  .dash-mob-task{
+    display: flex; align-items: center; gap: 8px;
+    min-height: 44px;
+    padding: 7px 11px;
+    border-bottom: 1px solid rgba(255,255,255,.04);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    transition: background .14s ease;
+    background: transparent;
+  }
+  .dash-mob-task:last-child{ border-bottom: 0; }
+  .dash-mob-task:active{ background: rgba(255,255,255,.04); }
+  .dash-mob-task-dot{
+    width: 8px; height: 8px; border-radius: 50%;
+    flex-shrink: 0; background: var(--muted2);
+    box-shadow: 0 0 0 2px rgba(255,255,255,.04);
+  }
+  .dash-mob-task.priority-high .dash-mob-task-dot{ background: #ff4f5e; box-shadow: 0 0 8px rgba(255,79,94,.5), 0 0 0 2px rgba(255,79,94,.15); }
+  .dash-mob-task.priority-med .dash-mob-task-dot{ background: #ffb040; }
+  .dash-mob-task.priority-low .dash-mob-task-dot{ background: #22ff88; }
+  .dash-mob-task-name{
+    flex: 1; min-width: 0;
+    font-size: .82rem; font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: -.005em;
+  }
+  .dash-mob-task.done .dash-mob-task-name{ text-decoration: line-through; opacity: .55; }
+  .dash-mob-task-sub{
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: .66rem;
+    font-weight: 700;
+    letter-spacing: .02em;
+    background: rgba(var(--accent-rgb),.12);
+    color: var(--accent);
+  }
+  .dash-mob-task-time{
+    flex-shrink: 0;
+    font-size: .72rem; font-weight: 600;
+    color: var(--muted2);
+    min-width: 50px; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .dash-mob-task.overdue .dash-mob-task-time{ color: #ff4f5e; }
+  .dash-mob-task-empty{
+    text-align: center;
+    padding: 28px 16px;
+    color: var(--muted);
+    font-size: .88rem;
+  }
+
+  /* Workload mini chart — the existing dash-workload-compact already exists.
+     Tighten its spacing on mobile so it fits the new stack. */
+  #dashboard .dash-workload-compact{ margin-top: 2px !important; padding: 12px 12px !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MOBILE CALENDAR (≤768px) — month header, 7-col day grid with dots,
+   accent-circle selected day, bold-underline today, inline task list,
+   slide animation on month change. Desktop calendar layout preserved.
+   ════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px){
+  /* Hide the descriptive sub header + desktop event/schedule setup cards */
+  #calendar .flux-page-header--lead{ display: none !important; }
+  /* School Info — the edit and delete buttons on each class row measured
+     18x24 and 20x28 on a phone, against a 44x44 minimum. That is under a
+     quarter and under a third of the target area, and they sit side by side
+     with the destructive one on the outside, so the realistic mistake is not
+     "I missed" — it is deleting a class while reaching for edit.
+
+     The row is 11px of gap and the glyphs stay their current size; only the
+     hit area grows, so nothing about the layout moves. */
+  #school .class-row button{
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Adding a class was close to impossible on a phone. The row is
+     `auto 1fr 1fr auto`: the long "Period (A4, B4…)" label and the + button
+     claim both auto tracks, and at 390px that left Class Name and Teacher
+     46px each — narrower than their own placeholders, so you could not read
+     what you had typed. Days came out at 45px in the row below. Adding
+     classes is the first thing a student ever does here.
+
+     One field per line, and the + button full width under them. */
+  #school .sch-add-class-row,
+  #school .sch-class-meta-row{ grid-template-columns: 1fr !important; }
+  /* Stretched to full width a bare "+" reads as a divider, not a button, and
+     it sits above Days / Time / Room. Those are all optional — addClass()
+     requires only the name — so the position is fine; it just has to say what
+     it does. Desktop keeps the narrow + as its own grid column. */
+  #school .sch-add-class-row > button{ width: 100%; min-height: 44px; }
+  #school .sch-add-class-row > button::after{ content: ' Add class'; }
+  #school .sch-add-class-row #classPeriod{ width: 100% !important; }
+
+  #calendar .cal-gcal-inline{ display: none !important; }
+
+  /* "Cycle days & weekly schedule" used to be hidden here, along with the
+     section wrapping it. That was the only place in Flux where you set the
+     A/B rotation and your weekly repeating activities — so a student with
+     only a phone could see the A/B letters on their calendar and had no way
+     whatsoever to switch them on or say what the pattern was. Two other
+     features mount into that same section (flux-event-buffer.js:333,
+     flux-travel-time.js:308), so they were invisible on phones too.
+
+     It fits: 351px wide inside a 390px viewport, nothing overflowing. What it
+     did *not* have was thumb-sized controls — 17 of them came in under 44px,
+     the same fault already fixed on the Settings switches — so the sizing
+     below travels with the unhiding rather than after it.
+
+     The two selectors dropped alongside, [data-flux-cal-section="next"] and
+     ="events", matched nothing: the only sections that exist are "hero" and
+     "schedule", and no script creates others. */
+  #calendar .cal-schedule-setup input[type="text"],
+  #calendar .cal-schedule-setup input[type="date"],
+  #calendar .cal-schedule-setup input[type="time"],
+  #calendar .cal-schedule-setup select,
+  #calendar .cal-schedule-setup button{ min-height: 44px; }
+
+  /* A checkbox cannot simply grow — 44px of ink is a blob — so the box keeps
+     its size and the label around it carries the target. */
+  #calendar .cal-schedule-setup label{ min-height: 44px; }
+  #calendar .cal-schedule-setup input[type="checkbox"]{ width: 20px; height: 20px; flex: none; }
+
+  /* Two date/pattern fields side by side leaves each about 160px on a phone.
+     One per line instead. */
+  #calendar .cal-schedule-setup > div > div[style*="grid-template-columns"]{
+    grid-template-columns: 1fr !important;
+  }
+
+  #calendar{ padding: 14px max(14px, var(--sa-left)) var(--flux-nav-clearance) max(14px, var(--sa-right)) !important; }
+
+  /* Hero card — frameless on mobile for a fullscreen feel */
+  #calendar .cal-hero-card{
+    padding: 12px 10px 14px !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* Month header — bigger, centered */
+  #calendar .cal-nav-row{
+    margin-bottom: 10px !important;
+    padding: 4px 2px 6px;
+  }
+  #calendar .cal-nav-btn{
+    width: 44px !important; height: 44px !important;
+    min-width: 44px !important;
+    padding: 0 !important;
+    border-radius: 12px !important;
+    font-size: 1.3rem !important;
+    background: rgba(255,255,255,.04) !important;
+    border: 1px solid rgba(255,255,255,.07) !important;
+    color: var(--text) !important;
+    display: inline-flex; align-items: center; justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #calendar .cal-nav-btn:active{ transform: scale(.94); }
+  #calendar .cal-month-label{
+    font-size: 1.14rem !important;
+    font-weight: 800 !important;
+    letter-spacing: -.015em !important;
+    color: var(--text) !important;
+    text-align: center;
+    flex: 1;
+  }
+
+  /* Day grid + cells */
+  #calendar .cal-grid{
+    gap: 4px !important;
+  }
+  #calendar .cal-hero-card .cal-day{
+    min-height: 48px !important;
+    padding: 5px 2px !important;
+    border-radius: 12px !important;
+    position: relative;
+    aspect-ratio: unset;
+    user-select: none;
+  }
+  #calendar .cal-dow{
+    font-size: .65rem !important;
+    font-weight: 700;
+    letter-spacing: .12em;
+    color: var(--muted2);
+    text-align: center;
+    padding: 6px 0 4px;
+  }
+  #calendar .cal-day .cal-dn{
+    font-size: .92rem !important;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1;
+    padding: 4px 0 2px;
+  }
+  /* Today: bold + subtle underline (no background fill per spec) */
+  #calendar .cal-hero-card .cal-day.today{
+    background: transparent !important;
+    border: 0 !important;
+    outline: 0 !important;
+  }
+  #calendar .cal-hero-card .cal-day.today .cal-dn{
+    font-weight: 800 !important;
+    position: relative;
+    color: var(--text) !important;
+  }
+  #calendar .cal-hero-card .cal-day.today .cal-dn::after{
+    content: '';
+    display: block;
+    width: 16px; height: 2px;
+    border-radius: 2px;
+    background: var(--accent);
+    margin: 2px auto 0;
+  }
+  /* Selected: accent-colored circle behind the day number (not the whole cell) */
+  #calendar .cal-hero-card .cal-day.selected{
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  #calendar .cal-hero-card .cal-day.selected .cal-dn{
+    position: relative;
+    color: #000 !important;
+    font-weight: 800 !important;
+  }
+  #calendar .cal-hero-card .cal-day.selected .cal-dn::before{
+    content: '';
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 28px; height: 28px;
+    margin-left: -14px; margin-top: -14px;
+    border-radius: 50%;
+    background: var(--accent);
+    z-index: -1;
+    box-shadow: 0 2px 10px rgba(var(--accent-rgb),.45);
+  }
+  #calendar .cal-hero-card .cal-day.selected .cal-dn::after{ display: none !important; }
+
+  /* Hide desktop task bars on mobile — rely on mobile dots row */
+  #calendar .cal-hero-card .cal-task-bar{ display: none !important; }
+  #calendar .cal-hero-card .cal-dots{ display: none !important; }
+  #calendar .cal-hero-card .cal-dots-mobile{ display: flex !important; justify-content: center; gap: 3px; margin-top: 2px; }
+
+  /* AB pill: visually subtle on mobile so it doesn't crowd the cell */
+  #calendar .cal-day > div[style*="JetBrains Mono"]{ font-size: .48rem !important; opacity: .6; }
+
+  /* Day tasks section (below grid) */
+  #calendar .cal-selected-integrated{
+    margin-top: 14px !important;
+    padding-top: 14px !important;
+    border-top: 1px solid rgba(255,255,255,.08);
+  }
+  #calendar .cal-day-title{
+    font-size: .95rem !important;
+    font-weight: 800 !important;
+    letter-spacing: -.01em;
+  }
+  #calendar .cal-selected-actions{
+    display: flex; gap: 6px;
+  }
+  #calendar .cal-add-btn,
+  #calendar .cal-add-event-btn{
+    min-height: 38px !important;
+    padding: 6px 14px !important;
+    border-radius: 999px !important;
+    font-size: .78rem !important;
+    font-weight: 700 !important;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Add task + event buttons stacked cleanly on very narrow screens */
+  @media (max-width: 380px){
+    #calendar .cal-selected-header{ flex-direction: column; align-items: stretch; gap: 8px; }
+    #calendar .cal-selected-actions{ justify-content: flex-start; }
+  }
+  #calendar #calDayTasks .task-item{
+    min-height: 48px !important;
+    padding: 10px 12px !important;
+    border-radius: 12px !important;
+    background: rgba(255,255,255,.03) !important;
+    border: 1px solid rgba(255,255,255,.06) !important;
+  }
+  #calendar #calDayTasks .task-item .check{
+    width: 24px; height: 24px;
+    border-radius: 8px;
+    border: 2px solid var(--muted2);
+    flex-shrink: 0;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Month slide transition — applied by JS when changing months */
+.cal-grid.cal-grid-slide-out-l{ animation: calSlideOutLeft .22s cubic-bezier(.35,.05,.25,1) both; }
+.cal-grid.cal-grid-slide-out-r{ animation: calSlideOutRight .22s cubic-bezier(.35,.05,.25,1) both; }
+.cal-grid.cal-grid-slide-in-l{ animation: calSlideInLeft .26s cubic-bezier(.2,.85,.3,1) both; }
+.cal-grid.cal-grid-slide-in-r{ animation: calSlideInRight .26s cubic-bezier(.2,.85,.3,1) both; }
+@keyframes calSlideOutLeft{
+  from{ transform: translateX(0); opacity: 1; }
+  to  { transform: translateX(-28px); opacity: 0; }
+}
+@keyframes calSlideOutRight{
+  from{ transform: translateX(0); opacity: 1; }
+  to  { transform: translateX(28px); opacity: 0; }
+}
+@keyframes calSlideInLeft{
+  from{ transform: translateX(28px); opacity: 0; }
+  to  { transform: translateX(0); opacity: 1; }
+}
+@keyframes calSlideInRight{
+  from{ transform: translateX(-28px); opacity: 0; }
+  to  { transform: translateX(0); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce){
+  .cal-grid.cal-grid-slide-out-l,
+  .cal-grid.cal-grid-slide-out-r,
+  .cal-grid.cal-grid-slide-in-l,
+  .cal-grid.cal-grid-slide-in-r{ animation: none !important; }
+}
+
+/* Default: hide the mobile-only attach (+) button on desktop */
+.ai-attach{ display: none; }
+
+/* ════════════════════════════════════════════════════════════════
+   DASHBOARD SKELETON LOADER ADDITIONS
+   (base .flux-skel styling lives in flux-pro.css — we only add the
+    larger block variants + boot overlay container rules below)
+   ════════════════════════════════════════════════════════════════ */
+.flux-skel-block{ height: 56px; border-radius: 12px; }
+.flux-skel-block.sm{ height: 40px; }
+.flux-skel-block.lg{ height: 88px; }
+.flux-dash-skel{ display:flex; flex-direction:column; gap:12px; }
+.flux-dash-skel .flux-skel-row{ display:grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.flux-dash-skel .flux-skel-row .flux-skel{ height: 54px; border-radius: 12px; }
+@media (max-width: 900px){
+  .flux-dash-skel .flux-skel-row{ grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   TASK LIST RENDER HINT (content-visibility for long lists)
+   Applies on both mobile and desktop — each off-screen task item
+   is skipped by the layout engine but reserves ~64px of space so
+   scrollbar length stays accurate.
+   ════════════════════════════════════════════════════════════════ */
+.task-item{
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+}
+/* Perf: long lists + stacked cards — strip blur only when liquid glass is off or Snappy mode is on */
+html[data-flux-glass="off"] #flux-main .task-item,
+html[data-flux-perf="on"] #flux-main .task-item{
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+html[data-flux-glass="off"] #flux-main .card,
+html[data-flux-glass="off"] #flux-main .stat,
+html[data-flux-glass="off"] #flux-main .quick-add,
+html[data-flux-perf="on"] #flux-main .card,
+html[data-flux-perf="on"] #flux-main .stat,
+html[data-flux-perf="on"] #flux-main .quick-add{
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+#taskList{
+  contain: layout style;
+}
+@media (max-width: 768px){
+  /* Avoid Safari/contain quirks where the list paints as empty below toolbars */
+  #dashboard #taskList{
+    contain: none;
+    position: relative;
+    z-index: 1;
+  }
+}
+
+/* Panel enter: flux-motion.css defines @keyframes fluxPanelEnter + .panel.active.flux-panel-enter.
+   Tab .panel.active uses panelReveal in styles.css (do not duplicate @keyframes fluxPanelIn here — name collision). */
+
+/* Snappy tab switches on phones — the stacked entrance animations (panelIn +
+   fluxPanelEnter + panelReveal) compounded the perceived lag. Show instantly. */
+@media (max-width: 768px) {
+  .panel,
+  .panel.active,
+  .panel.active.flux-panel-enter { animation: none !important; }
+}
+
+/* Modal animations (shared) — any element that has .flux-modal-anim gets a spring fade */
+@keyframes fluxModalIn {
+  from { opacity: 0; transform: scale(.97) translateY(6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.flux-modal-anim{ animation: fluxModalIn .22s cubic-bezier(.2,.85,.3,1) both; }
+
+/* Inactive .panel nodes must not use content-visibility + intrinsic size in the
+   flex column — it caused #toolbox and other hidden panels to overlap the active tab. */
+
+/* ════════════════════════════════════════════════════════════════
+   PANIC MODE — subtle dim + glow on urgent tasks + nav dot
+   ════════════════════════════════════════════════════════════════ */
+body.flux-panic .task-card:not(.flux-task-urgent){
+  opacity: .55;
+  transition: opacity .25s ease;
+}
+body.flux-panic .task-card.flux-task-urgent{
+  animation: fluxTaskUrgentGlow 1.8s ease-in-out infinite;
+  border-color: rgba(255,107,107,.5) !important;
+  position: relative;
+  z-index: 1;
+}
+@keyframes fluxTaskUrgentGlow{
+  0%,100%{ box-shadow: 0 0 0 0 rgba(255,107,107,.35), 0 0 0 1px rgba(255,107,107,.35); }
+  50%{    box-shadow: 0 0 22px 6px rgba(255,107,107,.28), 0 0 0 1px rgba(255,107,107,.6); }
+}
+.flux-nav-panic-dot{
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff6b6b;
+  box-shadow: 0 0 0 2px var(--card);
+  animation: fluxPanicDotBlink 1.2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes fluxPanicDotBlink{
+  0%,100%{ opacity: 1; transform: scale(1); }
+  50%{    opacity: .4; transform: scale(.85); }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Study tools panel (unified #toolbox.st-panel) — legacy ref-* kept for modals
+   ════════════════════════════════════════════════════════════════ */
+#toolbox.st-panel{ max-width: 1240px; margin: 0 auto; }
+
+.ref-search-row{ margin: 0 0 14px; }
+.ref-search-input{
+  width: 100%;
+  min-height: 46px;
+  padding: 12px 16px;
+  font-size: .94rem;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.03);
+  color: var(--text);
+  -webkit-appearance: none;
+  transition: border-color .12s ease, background .12s ease;
+}
+.ref-search-input:focus{
+  outline: none;
+  border-color: rgba(var(--accent-rgb),.45);
+  background: rgba(var(--accent-rgb),.04);
+}
+[data-theme="light"] .ref-search-input{
+  background: rgba(0,0,0,.02);
+  border-color: rgba(0,0,0,.08);
+}
+
+.ref-class-chips{
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  gap: 6px;
+  padding: 2px 0 14px;
+  margin: 0 0 8px;
+}
+.ref-class-chips::-webkit-scrollbar{ display: none; }
+.ref-chip{
+  flex-shrink: 0;
+  min-height: 36px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.03);
+  color: var(--muted2);
+  font-size: .78rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .14s ease, color .14s ease, border-color .14s ease, transform .14s ease;
+}
+.ref-chip:hover{ background: rgba(255,255,255,.06); color: var(--text); }
+.ref-chip.on{
+  background: rgba(var(--accent-rgb),.14);
+  border-color: rgba(var(--accent-rgb),.35);
+  color: var(--accent);
+}
+.ref-chip:active{ transform: scale(.96); }
+[data-theme="light"] .ref-chip{ background: rgba(0,0,0,.03); border-color: rgba(0,0,0,.08); }
+
+.ref-grid{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 14px;
+}
+@media (max-width: 1020px){ .ref-grid{ grid-template-columns: repeat(2, minmax(0,1fr)); } }
+@media (max-width: 640px){ .ref-grid{ grid-template-columns: 1fr; } }
+
+.ref-card{
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px 18px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  border: 1px solid rgba(255,255,255,.06);
+  cursor: pointer;
+  transition: transform .16s ease, border-color .14s ease, background .14s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.ref-card:hover{
+  transform: translateY(-2px);
+  border-color: rgba(var(--accent-rgb),.22);
+  background: color-mix(in srgb, var(--card) 85%, rgba(var(--accent-rgb),.04));
+}
+.ref-card:active{ transform: scale(.98); }
+[data-theme="light"] .ref-card{
+  background: #fff;
+  border-color: rgba(0,0,0,.06);
+}
+.ref-card-head{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ref-emoji{ font-size: 1.8rem; line-height: 1; }
+.ref-shortcut{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.08);
+  font-size: .66rem;
+  font-weight: 800;
+  color: var(--muted2);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.ref-card-name{
+  font-size: 1.02rem;
+  font-weight: 800;
+  letter-spacing: -.015em;
+  color: var(--text);
+  margin-top: 2px;
+}
+.ref-card-desc{
+  flex: 1;
+  font-size: .82rem;
+  color: var(--muted2);
+  line-height: 1.45;
+}
+.ref-card-tags{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ref-tag{
+  padding: 2px 8px;
+  font-size: .68rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: rgba(var(--accent-rgb),.1);
+  color: var(--accent);
+  border: 1px solid rgba(var(--accent-rgb),.22);
+}
+.ref-card-open{
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 7px 14px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #000;
+  font-size: .78rem;
+  font-weight: 800;
+  border: 0;
+  cursor: pointer;
+  transition: transform .14s ease, background .14s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.ref-card-open:hover{ background: color-mix(in srgb, var(--accent) 90%, #000); }
+.ref-card-open:active{ transform: scale(.96); }
+
+.ref-empty{
+  grid-column: 1 / -1;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--muted);
+  border-radius: 14px;
+  background: rgba(255,255,255,.02);
+  border: 1px dashed rgba(255,255,255,.1);
+}
+
+@media (max-width: 768px){
+  #toolbox.st-panel{
+    padding: 12px max(14px, var(--sa-left)) var(--flux-nav-clearance) max(14px, var(--sa-right)) !important;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   REFERENCE TOOL MODAL — shared modal shell for all 8 tools
+   ════════════════════════════════════════════════════════════════ */
+.ref-tool-overlay{
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.72);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  z-index: var(--flux-z-ref-tool-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: refToolFadeIn .18s ease both;
+}
+@keyframes refToolFadeIn{ from{ opacity:0 } to{ opacity:1 } }
+.ref-tool-modal{
+  width: 100%;
+  max-width: 960px;
+  max-height: 92vh;
+  background: var(--card);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 28px 80px rgba(0,0,0,.5);
+  animation: refToolSlideUp .22s cubic-bezier(.2,.85,.3,1) both;
+}
+@keyframes refToolSlideUp{ from{ transform: translateY(14px); opacity:0 } to{ transform: translateY(0); opacity:1 } }
+[data-theme="light"] .ref-tool-modal{ background: #fff; border-color: rgba(0,0,0,.08); }
+
+/* Inline rendering (Study Hub): the same tool, mounted in the panel body as a
+   normal interface instead of a popup overlay. */
+.ref-tool-inline{
+  background: var(--card2, rgba(255,255,255,.02));
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 16px;
+  overflow: hidden;
+  animation: refToolFadeIn .18s ease both;
+}
+.ref-tool-inline .ref-tool-head--inline{ border-bottom: 1px solid rgba(255,255,255,.06); }
+.ref-tool-inline .ref-tool-body{ max-height: none; }
+[data-theme="light"] .ref-tool-inline{ background: #fff; border-color: rgba(0,0,0,.08); }
+
+.ref-tool-head{
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  flex-shrink: 0;
+}
+.ref-tool-emoji{ font-size: 1.5rem; }
+.ref-tool-title{ font-size: 1.05rem; font-weight: 800; letter-spacing: -.015em; flex: 1; }
+.ref-tool-close{
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.03);
+  color: var(--muted2);
+  cursor: pointer;
+  font-size: 1.05rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .14s ease, color .14s ease, transform .14s ease;
+}
+.ref-tool-close:hover{ background: rgba(255,255,255,.07); color: var(--text); }
+.ref-tool-close:active{ transform: scale(.92); }
+
+.ref-tool-tabs{
+  display: flex;
+  gap: 6px;
+  padding: 10px 16px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  flex-shrink: 0;
+}
+.ref-tool-tabs::-webkit-scrollbar{ display: none; }
+.ref-tool-tab{
+  flex-shrink: 0;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.07);
+  background: transparent;
+  color: var(--muted2);
+  font-size: .78rem;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.ref-tool-tab:hover{ color: var(--text); background: rgba(255,255,255,.04); }
+.ref-tool-tab.active{
+  background: rgba(var(--accent-rgb),.14);
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb),.3);
+}
+
+.ref-tool-body{
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 18px 24px;
+  -webkit-overflow-scrolling: touch;
+}
+@media (max-width: 768px){
+  .ref-tool-overlay{ padding: 0; }
+  .ref-tool-modal{ max-width: 100%; max-height: 100vh; border-radius: 0; }
+  .ref-tool-head{ padding: max(12px, var(--sa-top)) 14px 12px; }
+  .ref-tool-tabs{ padding: 8px 12px; }
+  .ref-tool-body{ padding: 14px 14px calc(22px + var(--sa-bottom)); }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   REFERENCE TOOLS — inner search, formula grid, tables, etc.
+   ════════════════════════════════════════════════════════════════ */
+.ref-inner-search{ margin-bottom: 14px; }
+
+.ref-formula-grid{
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.ref-formula-card{
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.06);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+[data-theme="light"] .ref-formula-card{ background: rgba(0,0,0,.02); border-color: rgba(0,0,0,.06); }
+.ref-formula-name{ font-weight: 800; font-size: .92rem; letter-spacing: -.015em; }
+.ref-formula-eq{
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb),.08);
+  color: var(--text);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: .9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ref-formula-vars{ font-size: .78rem; color: var(--muted2); }
+.ref-formula-ex{ font-size: .78rem; color: var(--muted2); }
+.ref-formula-vars strong, .ref-formula-ex strong{ color: var(--text); }
+
+/* ── Generic reference tables (chem, codons, ascii, big-o) ────── */
+.ref-table{
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: .84rem;
+}
+.ref-table thead th{
+  position: sticky;
+  top: 0;
+  background: var(--card);
+  z-index: var(--flux-z-sticky-low);
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 800;
+  font-size: .76rem;
+  color: var(--muted2);
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.ref-table tbody td{
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  vertical-align: middle;
+}
+.ref-table tbody tr:hover{ background: rgba(255,255,255,.03); }
+[data-theme="light"] .ref-table thead th{ background: #fff; border-color: rgba(0,0,0,.08); }
+[data-theme="light"] .ref-table tbody td{ border-color: rgba(0,0,0,.05); }
+
+.ref-badge{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  font-size: .72rem;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.ref-badge--neg{ background: rgba(255,107,107,.15); color: #ff8a8a; border: 1px solid rgba(255,107,107,.3); }
+.ref-badge--pos{ background: rgba(108,231,138,.15); color: #6ce78a; border: 1px solid rgba(108,231,138,.3); }
+.ref-badge--neu{ background: rgba(255,255,255,.05); color: var(--muted2); border: 1px solid rgba(255,255,255,.1); }
+
+/* ── Chemistry solubility row colors ──────────────────────────── */
+.ref-sol-row{
+  padding: 12px 14px;
+  border-radius: 12px;
+  margin-bottom: 8px;
+  border-left: 4px solid transparent;
+}
+.ref-sol-row--sol{ background: rgba(108,231,138,.08); border-left-color: #6ce78a; }
+.ref-sol-row--insol{ background: rgba(255,107,107,.08); border-left-color: #ff6b6b; }
+.ref-sol-row--except{ background: rgba(255,193,7,.08); border-left-color: #ffc107; }
+.ref-sol-rule{ font-weight: 700; margin-bottom: 4px; }
+.ref-sol-exc{ font-size: .8rem; color: var(--muted2); padding-left: 10px; border-left: 2px solid rgba(255,255,255,.08); margin-top: 4px; }
+
+/* ── Chemistry pH bar ─────────────────────────────────────────── */
+.ref-ph-bar{
+  display: flex;
+  height: 44px;
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 14px 0 18px;
+  position: relative;
+}
+.ref-ph-bar > div{
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: .72rem;
+  color: rgba(0,0,0,.75);
+}
+.ref-ph-legend{
+  display: flex;
+  justify-content: space-between;
+  font-size: .72rem;
+  color: var(--muted2);
+  margin-bottom: 14px;
+}
+
+/* ── Codon table ───────────────────────────────────────────────── */
+.ref-codon-grid{
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.ref-codon-cell{
+  padding: 8px 6px;
+  text-align: center;
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: .76rem;
+  line-height: 1.25;
+  cursor: pointer;
+  transition: transform .12s ease;
+  border: 2px solid transparent;
+}
+.ref-codon-cell:hover{ transform: scale(1.04); }
+.ref-codon-cell .c{ font-weight: 800; font-size: .84rem; display: block; }
+.ref-codon-cell .aa{ font-size: .7rem; opacity: .85; display: block; }
+.ref-codon-cell.pulse{ animation: refCodonPulse 1.5s ease; }
+@keyframes refCodonPulse{ 0%,100%{ box-shadow: 0 0 0 0 rgba(var(--accent-rgb),.7) } 50%{ box-shadow: 0 0 0 6px rgba(var(--accent-rgb),0) } }
+.codon-nonpolar{ background: rgba(255,193,7,.22); color: #ffc107; }
+.codon-polar{    background: rgba(64,156,255,.22); color: #7cb8ff; }
+.codon-posch{    background: rgba(108,231,138,.22); color: #6ce78a; }
+.codon-negch{    background: rgba(255,107,107,.22); color: #ff8a8a; }
+.codon-stop{     background: rgba(140,30,30,.3); color: #ff7070; }
+.codon-start{ border-color: var(--accent) !important; }
+
+.ref-codon-legend{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-size: .76rem;
+}
+.ref-codon-legend span{
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.ref-codon-legend i{
+  width: 14px; height: 14px; border-radius: 4px; display: inline-block;
+}
+
+/* ── Language conjugator tables ───────────────────────────────── */
+.ref-conj-wrap{ display: grid; grid-template-columns: 1fr; gap: 14px; }
+.ref-conj-search{ position: relative; }
+.ref-conj-autocomplete{
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0; right: 0;
+  background: var(--card);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: var(--flux-z-page-sticky);
+  box-shadow: 0 12px 28px rgba(0,0,0,.4);
+}
+.ref-conj-autocomplete button{
+  display: block; width: 100%; text-align: left;
+  padding: 8px 12px;
+  background: none; border: 0;
+  color: var(--text);
+  cursor: pointer;
+  font-size: .85rem;
+}
+.ref-conj-autocomplete button:hover{ background: rgba(255,255,255,.05); }
+.ref-conj-chips{
+  display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px;
+}
+.ref-conj-chip{
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  font-size: .76rem;
+  font-weight: 700;
+  color: var(--muted2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ref-conj-chip:hover{ background: rgba(255,255,255,.07); color: var(--text); }
+.ref-conj-chip.irregular{ border-color: rgba(255,193,7,.3); color: #ffc107; }
+.ref-conj-verb-title{
+  font-size: 1.4rem;
+  font-weight: 900;
+  letter-spacing: -.02em;
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 2px;
+}
+.ref-conj-gloss{ font-size: .86rem; color: var(--muted2); margin-bottom: 10px; }
+.ref-conj-badge{
+  font-size: .68rem;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.ref-conj-badge--irr{ background: rgba(255,193,7,.16); color: #ffc107; border: 1px solid rgba(255,193,7,.3); }
+.ref-conj-badge--etre{ background: rgba(108,231,138,.16); color: #6ce78a; border: 1px solid rgba(108,231,138,.3); }
+
+.ref-conj-table{
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.ref-conj-table td, .ref-conj-table th{
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  font-size: .88rem;
+}
+.ref-conj-table th{
+  width: 110px;
+  color: var(--muted2);
+  font-weight: 700;
+  text-align: left;
+  font-size: .78rem;
+}
+.ref-conj-irr{ color: var(--accent); font-weight: 800; }
+
+/* ── Unit converter ───────────────────────────────────────────── */
+.ref-unit-row{
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.ref-unit-col{
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ref-unit-col select{
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.08);
+  color: var(--text);
+  font-size: .86rem;
+  font-weight: 700;
+}
+.ref-unit-col input{
+  height: 56px;
+  padding: 0 14px;
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb),.04);
+  border: 1px solid rgba(var(--accent-rgb),.2);
+  color: var(--text);
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  text-align: right;
+  -webkit-appearance: none;
+}
+.ref-unit-col input:focus{ outline: none; border-color: var(--accent); }
+.ref-unit-swap{
+  width: 42px; height: 42px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.1);
+  background: rgba(255,255,255,.03);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 1.1rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: transform .25s ease;
+}
+.ref-unit-swap:hover{ transform: rotate(180deg); }
+.ref-unit-formula{
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: .78rem;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.03);
+  color: var(--muted2);
+  margin-bottom: 12px;
+}
+.ref-unit-quick{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ref-unit-quick button{
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.08);
+  color: var(--muted2);
+  font-size: .76rem;
+  cursor: pointer;
+}
+.ref-unit-quick button:hover{ color: var(--accent); border-color: rgba(var(--accent-rgb),.3); }
+
+/* ── Big-O table + chart ───────────────────────────────────────── */
+.ref-bigo-row{
+  display: grid;
+  grid-template-columns: 1fr 1fr 110px;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  margin-bottom: 6px;
+  align-items: center;
+  border-left: 4px solid transparent;
+}
+.ref-bigo-complexity{ font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight: 800; }
+.ref-bigo-row--g{ background: rgba(108,231,138,.08); border-left-color: #6ce78a; }
+.ref-bigo-row--y{ background: rgba(255,193,7,.08); border-left-color: #ffc107; }
+.ref-bigo-row--o{ background: rgba(255,140,60,.08); border-left-color: #ff8c3c; }
+.ref-bigo-row--r{ background: rgba(255,107,107,.08); border-left-color: #ff6b6b; }
+
+/* ── History map ──────────────────────────────────────────────── */
+.ref-map-wrap{
+  position: relative;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255,255,255,.02);
+  border: 1px solid rgba(255,255,255,.06);
+}
+.ref-map-svg{ width: 100%; height: auto; display: block; }
+.ref-map-svg path{
+  fill: rgba(255,255,255,.1);
+  stroke: rgba(255,255,255,.2);
+  stroke-width: 1;
+  cursor: pointer;
+  transition: fill .14s ease;
+}
+.ref-map-svg path:hover{ fill: rgba(var(--accent-rgb),.3); }
+.ref-map-svg path.active{ fill: var(--accent); }
+.ref-map-svg path.era-match{ fill: rgba(255,193,7,.3); }
+.ref-map-eras{
+  display: flex;
+  gap: 6px;
+  padding: 10px 0;
+  overflow-x: auto;
+  flex-wrap: wrap;
+}
+.ref-map-era{
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  font-size: .78rem;
+  font-weight: 700;
+  color: var(--muted2);
+  cursor: pointer;
+}
+.ref-map-era.active{ background: rgba(var(--accent-rgb),.14); color: var(--accent); border-color: rgba(var(--accent-rgb),.3); }
+.ref-map-panel{
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.08);
+}
+.ref-map-panel h3{ margin: 0 0 10px; font-size: 1.05rem; font-weight: 800; }
+.ref-map-panel h4{ margin: 12px 0 6px; font-size: .82rem; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
+.ref-map-panel ul{ margin: 0; padding-left: 18px; font-size: .86rem; color: var(--muted2); line-height: 1.6; }
+
+/* ── Logic gates ──────────────────────────────────────────────── */
+.ref-gate-wrap{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+.ref-gate-card{
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.08);
+}
+.ref-gate-card svg{ width: 100%; height: 90px; display: block; }
+.ref-gate-tt{
+  width: 100%;
+  margin-top: 10px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: .8rem;
+}
+.ref-gate-tt th, .ref-gate-tt td{
+  padding: 4px 8px;
+  text-align: center;
+  border: 1px solid rgba(255,255,255,.06);
+}
+.ref-gate-tt th{ color: var(--muted2); font-weight: 700; }
+
+/* ── Constants list copy button ───────────────────────────────── */
+.ref-const-row{
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.03);
+  margin-bottom: 6px;
+  align-items: center;
+}
+.ref-const-name{ font-weight: 700; font-size: .88rem; }
+.ref-const-value{ font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--accent); font-size: .82rem; }
+.ref-const-copy{
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.08);
+  color: var(--muted2);
+  font-size: .72rem;
+  cursor: pointer;
+}
+.ref-const-copy:hover{ color: var(--accent); }
+
+/* ════════════════════════════════════════════════════════════════
+   Google Calendar push button on tasks
+   ════════════════════════════════════════════════════════════════ */
+.task-action-btn--gcal{
+  color: var(--muted2);
+  transition: color .14s ease, transform .14s ease;
+}
+.task-action-btn--gcal:hover{ color: #4285F4; transform: scale(1.05); }
+.task-action-btn--gcal:active{ transform: scale(.92); }
+/* Already synced — stays blue so the card shows at a glance what's on Calendar. */
+.task-action-btn--gcal.is-pushed{ color: #4285F4; }
+.task-action-btn--gcal.is-pushed .fxi{ opacity: 1; }
+
+/* ════════════════════════════════════════════════════════════════
+   BULK SELECT MODE on task list — bottom action bar (enter via app logic)
+   ════════════════════════════════════════════════════════════════ */
+.dash-filters-row{
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dash-filters-row .dash-filters{ flex: 1; min-width: 0; }
+
+/* Bulk action bar: sticky at bottom of dashboard */
+.task-bulk-bar{
+  position: sticky;
+  bottom: 0;
+  margin: 14px -8px 0;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+  backdrop-filter: blur(20px) saturate(170%);
+  border: 1px solid rgba(var(--accent-rgb),.22);
+  border-radius: 14px;
+  box-shadow: 0 8px 26px rgba(0,0,0,.32);
+  z-index: var(--flux-z-mobile-chrome);
+  animation: bulkBarIn .22s cubic-bezier(.2,.85,.3,1.1) both;
+}
+@keyframes bulkBarIn{
+  from{ transform: translateY(8px); opacity: 0; }
+  to  { transform: translateY(0); opacity: 1; }
+}
+.task-bulk-bar .bulk-count{
+  flex: 1;
+  min-width: 0;
+  font-size: .82rem;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-bulk-bar .bulk-btn{
+  flex-shrink: 0;
+  min-height: 36px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: .78rem;
+  font-weight: 700;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.03);
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .14s ease, transform .14s ease;
+}
+.task-bulk-bar .bulk-btn:hover{ background: rgba(255,255,255,.08); }
+.task-bulk-bar .bulk-btn:active{ transform: scale(.96); }
+.task-bulk-bar .bulk-btn-primary{
+  background: var(--accent);
+  color: #000;
+  border-color: transparent;
+}
+.task-bulk-bar .bulk-btn-primary:hover{ background: color-mix(in srgb, var(--accent) 88%, #000); }
+.task-bulk-bar .bulk-btn-danger{
+  background: rgba(255,79,94,.12);
+  color: #ff4f5e;
+  border-color: rgba(255,79,94,.25);
+}
+.task-bulk-bar .bulk-btn-danger:hover{ background: rgba(255,79,94,.18); }
+.task-bulk-bar .bulk-btn-cancel{
+  width: 36px; height: 36px;
+  padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1rem;
+  opacity: .7;
+}
+
+[data-theme="light"] .task-bulk-bar{
+  background: #fff;
+  border-color: rgba(0,0,0,.08);
+  box-shadow: 0 8px 26px rgba(0,0,0,.12);
+}
+
+/* Compact bulk bar on mobile: horizontal scroll if overflowing */
+@media (max-width: 768px){
+  .task-bulk-bar{
+    position: fixed;
+    left: max(14px, var(--sa-left));
+    right: max(14px, var(--sa-right));
+    bottom: calc(var(--bnav-total) + 10px);
+    margin: 0;
+    padding: 8px 10px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .task-bulk-bar .bulk-btn{ font-size: .74rem; padding: 6px 12px; min-height: 34px; }
+}
+
+/* While in bulk mode, dim non-selected rows a touch */
+body.flux-bulk-mode .task-item:not(:has(.task-bulk-cb:checked)){
+  opacity: .85;
+}
+body.flux-bulk-mode .task-item:has(.task-bulk-cb:checked){
+  background: rgba(var(--accent-rgb),.06) !important;
+  border-color: rgba(var(--accent-rgb),.25) !important;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   RIGHT-CLICK CONTEXT MENU on task cards (desktop)
+   ════════════════════════════════════════════════════════════════ */
+.flux-ctx-menu{
+  position: fixed;
+  min-width: 204px;
+  padding: 6px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+  backdrop-filter: blur(20px) saturate(170%);
+  border: 1px solid rgba(255,255,255,.09);
+  box-shadow: 0 18px 44px rgba(0,0,0,.42), 0 0 0 1px rgba(0,0,0,.2);
+  z-index: var(--flux-z-palette);
+  opacity: 0;
+  transform: scale(.95) translateY(-4px);
+  transform-origin: top left;
+  transition: opacity .14s ease, transform .16s cubic-bezier(.2,.85,.3,1.1);
+  user-select: none;
+}
+.flux-ctx-menu.flux-ctx-open{ opacity: 1; transform: scale(1) translateY(0); }
+.flux-ctx-menu.flux-ctx-closing{ opacity: 0; transform: scale(.97) translateY(-2px); }
+[data-theme="light"] .flux-ctx-menu{
+  background: color-mix(in srgb, #fff 96%, transparent);
+  border-color: rgba(0,0,0,.08);
+  box-shadow: 0 10px 32px rgba(0,0,0,.16);
+}
+.flux-ctx-sep{
+  height: 1px;
+  margin: 4px 2px;
+  background: rgba(255,255,255,.07);
+}
+[data-theme="light"] .flux-ctx-sep{ background: rgba(0,0,0,.08); }
+.flux-ctx-item{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: .84rem;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background .1s ease, color .1s ease;
+}
+.flux-ctx-item:hover,
+.flux-ctx-item:focus-visible{
+  background: rgba(var(--accent-rgb),.1);
+  color: var(--accent);
+  outline: none;
+}
+.flux-ctx-item.accent{ color: var(--accent); }
+.flux-ctx-item.accent:hover{ background: rgba(var(--accent-rgb),.15); }
+.flux-ctx-item.danger{ color: #ff4f5e; }
+.flux-ctx-item.danger:hover{ background: rgba(255,79,94,.12); color: #ff4f5e; }
+.flux-ctx-ico{
+  width: 20px; text-align: center;
+  font-size: .96rem;
+  flex-shrink: 0;
+  opacity: .85;
+}
+.flux-ctx-lbl{ flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+@media (prefers-reduced-motion: reduce){
+  .flux-ctx-menu{ transition: none; transform: none; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   TASK SWIPE GESTURES (mobile) — right=complete, left=delete
+   Relies on flux-mobile-swipe.js which wraps task-item children in
+   .task-swipe-inner and prepends .task-swipe-bg. Safe on desktop.
+   ════════════════════════════════════════════════════════════════ */
+.task-swipeable{
+  position: relative;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+.task-swipe-bg{
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 22px;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity .18s ease;
+  pointer-events: none;
+  z-index: var(--flux-z-base);
+}
+.task-swipe-right .task-swipe-bg,
+.task-swipe-left .task-swipe-bg{ opacity: 1; }
+.task-swipe-right .task-swipe-bg{
+  background: linear-gradient(90deg, rgba(34,255,136,.22), rgba(34,255,136,.08) 60%, transparent);
+}
+.task-swipe-left .task-swipe-bg{
+  background: linear-gradient(270deg, rgba(255,79,94,.22), rgba(255,79,94,.08) 60%, transparent);
+}
+.task-swipe-ico{
+  font-size: 1.4rem;
+  font-weight: 800;
+  transition: transform .18s cubic-bezier(.2,.85,.3,1.2), opacity .18s ease;
+  transform: scale(.7);
+  opacity: .6;
+}
+.task-swipe-ico-check{ color: #22ff88; }
+.task-swipe-ico-trash{ color: #ff4f5e; }
+.task-swipe-right .task-swipe-ico-check{ opacity: 1; transform: scale(1); }
+.task-swipe-left .task-swipe-ico-trash{ opacity: 1; transform: scale(1); }
+.task-swipe-armed.task-swipe-right .task-swipe-ico-check,
+.task-swipe-armed.task-swipe-left .task-swipe-ico-trash{ transform: scale(1.2); filter: drop-shadow(0 0 8px currentColor); }
+.task-swipe-inner{
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  align-items: inherit;
+  gap: inherit;
+  will-change: transform;
+}
+
+/* Reduced motion: no swipe transforms, no action firing — swipe bg stays hidden */
+@media (prefers-reduced-motion: reduce){
+  .task-swipe-bg{ display: none !important; }
+  .task-swipe-inner{ transition: none !important; transform: none !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MOBILE AI PANEL (≤768px) — messaging-app feel: pinned input row,
+   bubbles, streaming 3-dot indicator. Input sits above the bottom
+   tab bar and respects iPhone home-indicator safe area.
+   ════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px){
+  #ai.flux-ai-panel.ai-root .ai-topbar{
+    position: sticky;
+    top: 0;
+    z-index: var(--flux-z-sticky-mid);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    background: color-mix(in srgb, var(--card) 85%, transparent) !important;
+  }
+  /* Messages area takes full remaining height */
+  #ai #aiMsgsWrap{
+    padding: 12px 14px 14px !important;
+    padding-bottom: calc(14px + var(--sa-bottom)) !important;
+  }
+  #ai .ai-msgs{ gap: 10px !important; margin-bottom: 6px !important; }
+  #ai .ai-msg{ gap: 8px !important; }
+  #ai .ai-av{ width: 28px !important; height: 28px !important; font-size: .62rem !important; }
+  #ai .ai-bub{
+    max-width: 82% !important;
+    padding: 10px 14px !important;
+    font-size: .88rem !important;
+    line-height: 1.5 !important;
+    border-radius: 18px !important;
+  }
+  #ai .ai-msg.user .ai-bub{ border-top-right-radius: 5px !important; }
+  #ai .ai-msg:not(.user) .ai-bub{ border-top-left-radius: 5px !important; }
+
+  #ai .ai-think{ padding: 10px 14px !important; }
+  #ai .ai-think span{
+    width: 7px !important; height: 7px !important;
+    animation-name: aiThinkPulseMob !important;
+    animation-duration: 1.1s !important;
+    animation-timing-function: ease-in-out !important;
+    animation-iteration-count: infinite !important;
+  }
+
+  #ai .ai-composer,
+  #ai .flux-ai-composer-foot{
+    position: sticky;
+    bottom: 0;
+    padding: 8px 12px calc(8px + var(--sa-bottom)) 12px !important;
+    background: color-mix(in srgb, var(--card) 90%, transparent) !important;
+    -webkit-backdrop-filter: blur(20px) saturate(170%);
+    backdrop-filter: blur(20px) saturate(170%);
+    border-top: 1px solid rgba(255,255,255,.08) !important;
+    z-index: var(--flux-z-sticky-low);
+  }
+  #ai .ai-input-bar,
+  #ai .ai-irow{
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  #ai .ai-send{
+    flex-shrink: 0;
+    width: 42px !important; height: 42px !important;
+    min-width: 42px !important; min-height: 42px !important;
+    border-radius: 50% !important;
+    background: var(--accent) !important;
+    color: #000 !important;
+    font-size: 1.1rem !important;
+    font-weight: 800 !important;
+    border: 0 !important;
+    display: inline-flex; align-items: center; justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .14s ease;
+    order: 2;
+  }
+  #ai .ai-send:active{ transform: scale(.92); }
+  #ai .ai-send:disabled{ opacity: .5; }
+  #ai textarea#aiInput,
+  #ai .ai-input-field{
+    order: 1;
+    flex: 1;
+    min-height: 42px !important;
+    max-height: 120px !important;
+    padding: 10px 14px !important;
+    border-radius: 22px !important;
+    background: rgba(255,255,255,.04) !important;
+    border: 1px solid rgba(255,255,255,.08) !important;
+    font-size: .92rem !important;
+    resize: none;
+    -webkit-appearance: none;
+  }
+  [data-theme="light"] #ai textarea#aiInput,
+  [data-theme="light"] #ai .ai-input-field{
+    background: rgba(0,0,0,.03) !important;
+    border-color: rgba(0,0,0,.1) !important;
+  }
+  #ai .ai-topbar-attach,
+  #ai .flux-ai-head label[for],
+  #ai .flux-ai-head label{ display: none !important; }
+
+  #ai .ai-composer .ai-attach,
+  #ai .flux-ai-composer-foot .ai-attach{
+    display: inline-flex !important;
+    flex-shrink: 0;
+    width: 40px; height: 40px;
+    min-width: 40px;
+    border-radius: 50%;
+    background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.08);
+    color: var(--muted2);
+    font-size: 1.3rem;
+    font-weight: 300;
+    align-items: center; justify-content: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    padding: 0;
+    order: 0;
+  }
+  #ai .ai-composer .ai-attach:active,
+  #ai .flux-ai-composer-foot .ai-attach:active{ transform: scale(.92); }
+  #ai .ai-foot-hint,
+  #ai .flux-ai-composer-foot > div:last-child{ display: none !important; }
+}
+@keyframes aiThinkPulseMob{
+  0%, 80%, 100%{ opacity: .3; transform: scale(.85); }
+  40%{ opacity: 1; transform: scale(1.1); }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MOBILE NOTES (≤768px) — single column cards, prominent + button
+   ════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px){
+  #notes .flux-page-header--lead{ display: none !important; }
+  #notes{ padding: 12px max(14px, var(--sa-left)) var(--flux-nav-clearance) max(14px, var(--sa-right)) !important; }
+  #notes #notesListView > div:first-child{
+    gap: 8px !important;
+    margin-bottom: 14px !important;
+  }
+  #notes #noteSearch{
+    min-height: 44px !important;
+    padding: 10px 14px !important;
+    font-size: .92rem !important;
+    border-radius: 12px !important;
+  }
+  #notes #notesListView button[onclick*="openNewNote"]{
+    min-height: 44px !important;
+    min-width: 54px !important;
+    border-radius: 12px !important;
+    font-weight: 800 !important;
+  }
+  /* Notes list: single column, tappable cards */
+  #notes .notes-grid,
+  #notes [id*="notesList"]:not(#notesListView){
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px !important;
+  }
+  #notes .note-card{
+    padding: 14px 16px !important;
+    min-height: 72px !important;
+    border-radius: 14px !important;
+  }
+  #notes .note-card:active{ transform: scale(.98); transition: transform .12s ease; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MOBILE FOCUS TIMER (≤768px) — centered ring, huge time, chips
+   ════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px){
+  #timer .flux-page-header--lead{ display: none !important; }
+  #timer{ padding: 12px max(14px, var(--sa-left)) var(--flux-nav-clearance) max(14px, var(--sa-right)) !important; }
+  #timer .card:first-child{
+    padding: 24px 16px 20px !important;
+    border-radius: 18px !important;
+  }
+  /* Session chips as horizontal scroll row */
+  #timer .card:first-child > div:first-child{
+    overflow-x: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap !important;
+    justify-content: flex-start !important;
+    padding-bottom: 4px;
+    gap: 8px !important;
+  }
+  #timer .tmode-btn{
+    flex-shrink: 0 !important;
+    /* 44, not 38. flux-touch-targets.css:70 already lists .tmode-btn among the
+       buttons that must clear 44px, but this rule is (1,1,0) *and* !important
+       against that one's (0,1,0), so it won. The accessibility rule has been
+       dead on this tab since it was written, and all eight mode buttons —
+       Focus, Clock, Stopwatch, Countdown, Alarms, and the three session chips
+       — measured 38. A stylesheet that contradicts itself is the bug here;
+       the row simply gets 6px taller. */
+    min-height: 44px !important;
+    padding: 8px 16px !important;
+    border-radius: 999px !important;
+    font-weight: 700 !important;
+    font-size: .78rem !important;
+    white-space: nowrap;
+  }
+  /* Scale the ring up to 200px */
+  #timer .timer-ring{ width: 220px !important; height: 220px !important; }
+  #timer .t-disp{ font-size: 2.8rem !important; font-weight: 900 !important; letter-spacing: -.02em; }
+  #timer .t-lbl{ font-size: .72rem !important; text-transform: uppercase; letter-spacing: .1em; margin-top: 4px; }
+  /* Play/pause big, reset small next to it */
+  #timer #timerBtn{
+    min-height: 52px !important;
+    padding: 14px 40px !important;
+    font-size: 1.02rem !important;
+    font-weight: 800 !important;
+    border-radius: 14px !important;
+    order: 2;
+  }
+  #timer button[onclick="resetTimer()"]{
+    min-height: 44px !important;
+    padding: 10px 18px !important;
+    font-size: .82rem !important;
+    border-radius: 12px !important;
+    order: 1;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MOBILE SETTINGS (≤768px) — iOS grouped list feel; tabs wrap, left-aligned
+   ════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px){
+  #settings .flux-page-header--lead{ display: none !important; }
+  #settings{ padding: 12px max(14px, var(--sa-left)) var(--flux-nav-clearance) max(14px, var(--sa-right)) !important; }
+  #settings .stabs,
+  #settings.flux-page .flux-settings-stabs,
+  #settings.flux-page > .stabs{
+    /* Back to wrapping, now that there are eight sections rather than six.
+       This became single-row horizontal scroll because an earlier wrap left
+       "Data & info" alone on a second row and centred — but that was a
+       centring problem, and justify-content:flex-start below fixes it.
+       Scrolling does not survive eight tabs: measured at 375px the row is
+       619px of buttons inside a 345px strip, and with no edge cue the last
+       three — Your data, Help, About — were simply invisible. Wrapping puts
+       all eight on screen in two left-aligned rows. */
+    justify-content: flex-start !important;
+    flex-wrap: wrap !important;
+    overflow-x: visible !important;
+    /* Two rows are too tall to pin under the 50px top bar, and nobody
+       changes section while reading one. */
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    gap: 6px !important;
+    padding: 8px 4px !important;
+    margin-bottom: 12px !important;
+    scrollbar-width: none;
+  }
+  /* scroll-snap and the scrollbar rule are gone with the sideways scroll. */
+  #settings .stab{
+    flex: 0 0 auto !important;
+    min-height: 36px !important;
+    padding: 7px 14px !important;
+    border-radius: 999px !important;
+    font-weight: 700 !important;
+    font-size: .78rem !important;
+    white-space: nowrap !important;
+    background: rgba(255,255,255,.04) !important;
+    border: 1px solid rgba(255,255,255,.06) !important;
+  }
+  #settings .stab.active{
+    background: rgba(var(--accent-rgb),.14) !important;
+    border-color: rgba(var(--accent-rgb),.3) !important;
+    color: var(--accent) !important;
+  }
+  /* Cards in grouped list feel */
+  #settings .card{
+    padding: 6px 12px !important;
+    border-radius: 14px !important;
+    margin-bottom: 12px !important;
+  }
+  #settings .card > h3{
+    font-size: .66rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: .12em !important;
+    color: var(--muted2) !important;
+    padding: 12px 4px 6px !important;
+    margin: 0 !important;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+  }
+  #settings .srow{
+    min-height: 52px;
+    padding: 10px 4px !important;
+    border-bottom: 1px solid rgba(255,255,255,.05) !important;
+    align-items: center !important;
+  }
+  #settings .srow:last-child{ border-bottom: 0 !important; }
+  #settings .srow .slabel{ font-size: .92rem !important; font-weight: 600 !important; }
+  #settings .srow .ssub{ font-size: .74rem !important; color: var(--muted2) !important; margin-top: 2px; line-height: 1.35; }
+  /* Toggles bigger */
+  #settings .toggle{
+    min-width: 46px !important;
+    min-height: 28px !important;
+  }
+  /* Theme swatches as horizontal scroll row */
+  #settings .theme-swatches,
+  #settings .flux-theme-swatches{
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    gap: 10px !important;
+    padding: 6px 2px 12px !important;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Floating Pomodoro pill (focus session running)
+   ════════════════════════════════════════════════════════════════ */
+.flux-pomo-pill{
+  position: fixed;
+  z-index: var(--flux-z-pomo-pill);
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 15px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb),.32);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb),.2), rgba(12,16,28,.92));
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .86rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  cursor: pointer;
+  box-shadow: 0 10px 36px rgba(0,0,0,.38), 0 0 0 1px rgba(255,255,255,.05) inset, 0 0 28px rgba(var(--accent-rgb),.08);
+  transition: transform .15s var(--ease-spring, cubic-bezier(.2,.85,.3,1)), box-shadow .15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.flux-pomo-pill:active{ transform: scale(.97); }
+.flux-pomo-pill-ring{
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.flux-pomo-pill-ring svg{
+  display: block;
+}
+.flux-pomo-pill-lbl{
+  font-size: .58rem;
+  font-weight: 800;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--muted2);
+}
+@media (max-width: 768px){
+  /* B2: on phones the pill docks into the top bar chip area (centered in the
+     empty gap between brand and actions) instead of floating over the stats
+     row / AI composer at the bottom. Compact: ring + time only. */
+  .flux-pomo-pill:not([hidden]){
+    left: 50%;
+    transform: translateX(-50%);
+    top: calc(max(8px, var(--sa-top)) + 7px);
+    bottom: auto;
+    padding: 5px 12px;
+    gap: 7px;
+    font-size: .78rem;
+  }
+  .flux-pomo-pill:active{ transform: translateX(-50%) scale(.97); }
+  .flux-pomo-pill .flux-pomo-pill-lbl{ display: none; }
+}
+@media (min-width: 769px){
+  .flux-pomo-pill:not([hidden]){
+    right: 22px;
+    bottom: 24px;
+  }
+}
+[data-theme="light"] .flux-pomo-pill{
+  background: linear-gradient(135deg, rgba(var(--accent-rgb),.14), rgba(255,255,255,.94));
+  border-color: rgba(var(--accent-rgb),.26);
+  box-shadow: 0 10px 32px rgba(0,0,0,.12), 0 0 0 1px rgba(0,0,0,.05) inset;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Print: never show the sheet
+   ════════════════════════════════════════════════════════════════ */
+@media print{
+  .more-sheet,
+  .more-sheet-overlay,
+  .flux-pomo-pill{ display: none !important; }
+}
+
+/* ── Bottom-nav clearance for the two panels that opt out of .panel padding ──
+   The mobile bottom nav is ~63px tall, and .panel's bottom padding is what
+   normally clears it. #ai and #toolbox both override that padding to 0 for
+   their own layouts, so on a phone:
+     · the AI composer (position:sticky; bottom:0) came to rest 15px *under*
+       the nav — you were typing into a partly covered box;
+     · Study Tools left ~359px of the tool stage unreachable behind it.
+   The composer is lifted rather than padded because a sticky element pins to
+   its container's edge regardless of what sits on top of it. */
+@media (max-width: 768px) {
+  #ai .ai-composer {
+    bottom: var(--bnav-total);
+  }
+  #toolbox.fsh-active .fsh {
+    padding-bottom: var(--flux-nav-clearance);
+  }
+}

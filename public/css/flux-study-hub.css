@@ -1,0 +1,956 @@
+/* ============================================================================
+   FLUX STUDY HUB  ·  flux-study-hub.css   (Pass 1 — native tools)
+   Dark-first neumorphic + glassmorphism, Apple-inspired. Scoped to .fsh.
+   ========================================================================== */
+
+#toolbox.fsh-active .st-search-wrap,
+#toolbox.fsh-active #stSearchResults { display:none !important; }
+#toolbox.fsh-active { padding:0 !important; max-width:none !important; }
+
+.fsh {
+  --fsh-accent:#34d0ff;
+  --fsh-accent-rgb:52,208,255;
+  --fsh-radius:22px;
+  --fsh-radius-sm:14px;
+  --fsh-gap:18px;
+  --fsh-glass:linear-gradient(155deg, rgba(30,40,62,.72), rgba(16,22,38,.62));
+  --fsh-glass-2:linear-gradient(155deg, rgba(36,48,74,.55), rgba(18,25,42,.5));
+  --fsh-ink:var(--text, #f0f1f8);
+  --fsh-ink-2:var(--text2, #c8cad8);
+  --fsh-mut:var(--muted2, #8b90ad);
+  --fsh-line:var(--border2, rgba(255,255,255,.1));
+  --fsh-shadow:0 26px 60px -28px rgba(0,0,0,.85), 0 2px 0 rgba(255,255,255,.03) inset;
+  --fsh-neu:-7px -7px 16px rgba(255,255,255,.025), 8px 9px 22px rgba(0,0,0,.5);
+  --fsh-neu-in:inset 4px 4px 10px rgba(0,0,0,.45), inset -4px -4px 10px rgba(255,255,255,.03);
+  color:var(--fsh-ink);
+  position:relative;
+  width:100%;
+  /* The ::before ambient glow is inset -40px left and right, and nothing was
+     clipping it — on a 390px phone that made the panel 430px wide and the
+     whole page scrolled sideways. `clip` rather than `hidden` so this does not
+     become a scroll container and steal the vertical scroll. */
+  overflow-x:clip;
+  font-feature-settings:"ss01","cv01";
+}
+
+/* ── ambient glow backdrop ─────────────────────────────────────────────── */
+.fsh::before {
+  content:"";
+  position:absolute; inset:-60px -40px auto -40px; height:340px;
+  background:
+    radial-gradient(60% 80% at 18% 0%, rgba(var(--fsh-accent-rgb),.18), transparent 70%),
+    radial-gradient(50% 70% at 92% 8%, rgba(160,110,255,.14), transparent 72%);
+  filter:blur(8px); pointer-events:none; z-index:0; opacity:.9;
+  transition:background .6s ease;
+}
+.fsh > * { position:relative; z-index:1; }
+
+/* ── HERO ──────────────────────────────────────────────────────────────── */
+.fsh-hero { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; flex-wrap:wrap; padding:26px 26px 4px; }
+.fsh-hero-text h1 {
+  margin:0; font-size:clamp(24px,3.4vw,34px); font-weight:760; letter-spacing:-.02em;
+  background:linear-gradient(92deg, var(--fsh-ink), var(--fsh-accent) 140%);
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+}
+.fsh-hero-text p { margin:6px 0 0; color:var(--fsh-mut); font-size:14px; max-width:60ch; }
+.fsh-search { position:relative; min-width:min(320px,52vw); }
+.fsh-search input {
+  width:100%; padding:13px 40px 13px 42px; border-radius:999px;
+  background:rgba(10,14,24,.6); border:1px solid var(--fsh-line);
+  color:var(--fsh-ink); font-size:14.5px; outline:none; box-shadow:var(--fsh-neu-in);
+  transition:border-color .2s, box-shadow .2s;
+}
+.fsh-search input::placeholder { color:var(--fsh-mut); }
+.fsh-search input:focus { border-color:rgba(var(--fsh-accent-rgb),.6); box-shadow:var(--fsh-neu-in), 0 0 0 4px rgba(var(--fsh-accent-rgb),.12); }
+.fsh-search .fsh-search-ico { position:absolute; left:15px; top:50%; transform:translateY(-50%); opacity:.6; font-size:15px; pointer-events:none; }
+.fsh-search .fsh-search-clear { position:absolute; right:8px; top:50%; transform:translateY(-50%); border:0; background:rgba(255,255,255,.06); color:var(--fsh-ink-2); width:26px; height:26px; border-radius:50%; cursor:pointer; font-size:15px; line-height:1; display:grid; place-items:center; }
+.fsh-search .fsh-search-clear:hover { background:rgba(255,255,255,.12); }
+.fsh-search .fsh-search-clear[hidden] { display:none !important; }
+
+/* ── UMBRELLA ROW ──────────────────────────────────────────────────────────
+   The top-level choice, above the subject rail. Deliberately a wrapping *row*
+   rather than another horizontal scroller: five items fit at every width Flux
+   supports, and a second sideways-scrolling strip would have recreated the
+   very problem this replaces — subjects hidden off the right edge. */
+.fsh-group-row { display:flex; flex-wrap:wrap; gap:8px; padding:0 26px; margin:18px 0 2px; }
+.fsh-group {
+  display:inline-flex; align-items:center; gap:8px;
+  padding:9px 15px; border-radius:999px; cursor:pointer;
+  border:1px solid var(--fsh-line); background:rgba(10,14,24,.42);
+  color:var(--fsh-ink-2); font-size:13px; font-weight:650;
+  /* 44px so it clears the same thumb minimum the rest of Flux is held to. */
+  min-height:44px;
+  transition:color .18s, background .18s, border-color .18s;
+}
+.fsh-group:hover { color:var(--fsh-ink); border-color:rgba(var(--fsh-accent-rgb),.45); }
+.fsh-group.active {
+  color:#04121b; border-color:transparent;
+  background:linear-gradient(135deg, var(--fsh-accent), color-mix(in srgb, var(--fsh-accent) 58%, #fff 12%));
+  box-shadow:0 8px 20px -8px rgba(var(--fsh-accent-rgb),.6);
+}
+.fsh-group-ico { font-size:15px; line-height:0; }
+/* The count is orientation, not decoration: it says how much sits behind an
+   umbrella before you commit to opening it. */
+.fsh-group-n { font-size:11px; font-weight:700; padding:1px 7px; border-radius:999px; background:rgba(255,255,255,.12); }
+.fsh-group.active .fsh-group-n { background:rgba(0,0,0,.16); }
+[data-theme="light"] .fsh-group { background:rgba(255,255,255,.7); }
+[data-theme="light"] .fsh-group-n { background:rgba(0,0,0,.08); }
+@media (max-width:768px) { .fsh-group-row { padding:0 16px; gap:6px; } .fsh-group { padding:9px 12px; font-size:12.5px; } }
+
+/* ── More Flux apps shelf (appsShelfHtml): the study apps on their own page ── */
+.fsh-apps { padding:0 26px; margin:16px 0 0; }
+.fsh-apps-h { margin:0 0 8px; font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--fsh-mut); }
+/* One row that scrolls sideways rather than wrapping into a wall of cards
+   above the subjects, which are what most visits are for. */
+.fsh-apps-row { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; scrollbar-width:thin; scroll-snap-type:x proximity; }
+.fsh-app {
+  flex:0 0 auto; display:flex; align-items:center; gap:10px; min-height:44px;
+  padding:8px 14px 8px 10px; border-radius:var(--fsh-radius-sm); scroll-snap-align:start;
+  border:1px solid var(--fsh-line); background:rgba(10,14,24,.42);
+  color:var(--fsh-ink-2); text-decoration:none;
+  transition:color .18s, border-color .18s;
+}
+.fsh-app:hover, .fsh-app:focus-visible { color:var(--fsh-ink); border-color:rgba(var(--fsh-accent-rgb),.45); }
+.fsh-app-ico { display:inline-flex; width:30px; height:30px; flex:0 0 30px; align-items:center; justify-content:center; border-radius:9px; color:var(--fsh-accent); background:rgba(var(--fsh-accent-rgb),.12); }
+.fsh-app-t { display:flex; flex-direction:column; line-height:1.25; }
+.fsh-app-t b { font-size:13px; font-weight:700; color:var(--fsh-ink); }
+.fsh-app-t small { font-size:11.5px; color:var(--fsh-mut); white-space:nowrap; }
+[data-theme="light"] .fsh-app { background:rgba(255,255,255,.7); }
+@media (max-width:768px) { .fsh-apps { padding:0 16px; } }
+
+/* ── SUBJECT RAIL ──────────────────────────────────────────────────────── */
+.fsh-rail-wrap { position:relative; margin:18px 0 4px; }
+/* scroll-padding, not just padding: scrollIntoView() aligns to the scrollport
+   edge and ignores the rail's own padding, so selecting a subject nudged the
+   rail ~13px and left the first pill sliced against the screen edge while
+   every other block on the page kept its 16px gutter. */
+.fsh-rail { display:flex; gap:9px; overflow-x:auto; padding:6px 26px 12px; scroll-padding-inline:26px; scrollbar-width:none; scroll-behavior:smooth; }
+.fsh-rail::-webkit-scrollbar { height:0; }
+/* Each umbrella's pills are kept as retained detached nodes and the active set
+   is attached here directly (no wrapper), so switching umbrella costs no markup
+   parsing — it was ~25ms of blocking work per click on a school iPad. */
+.fsh-pill {
+  flex:0 0 auto; display:inline-flex; align-items:center; gap:8px;
+  padding:10px 16px; border-radius:999px; cursor:pointer; user-select:none;
+  background:var(--fsh-glass-2); border:1px solid var(--fsh-line);
+  color:var(--fsh-ink-2); font-size:13.5px; font-weight:560; white-space:nowrap;
+  backdrop-filter:blur(14px) saturate(140%); -webkit-backdrop-filter:blur(14px) saturate(140%);
+  transition:transform .18s cubic-bezier(.2,.8,.2,1), border-color .2s, color .2s, box-shadow .2s, background .2s;
+}
+.fsh-pill .fsh-pill-ico { font-size:15px; line-height:1; }
+.fsh-pill:hover { transform:translateY(-2px); color:var(--fsh-ink); }
+.fsh-pill.active {
+  color:#04121b; font-weight:680;
+  background:linear-gradient(135deg, var(--fsh-accent), color-mix(in srgb, var(--fsh-accent) 55%, #fff 12%));
+  border-color:transparent; box-shadow:0 10px 26px -8px rgba(var(--fsh-accent-rgb),.6);
+}
+/* ── FAVOURITE SUBJECTS ─────────────────────────────────────────────────
+   The rail holds 12 subjects, so the one you want is usually scrolled out of
+   view. Starring pins a subject to the front. The old `.flagship::after` star
+   was dropped here: two different stars in one rail read as one broken thing. */
+.fsh-pill-wrap { position:relative; flex:0 0 auto; display:inline-flex; }
+.fsh-fav-btn {
+  position:absolute; top:-5px; right:-5px; z-index:2;
+  width:20px; height:20px; padding:0; border-radius:999px; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center;
+  font-size:11px; line-height:1;
+  background:var(--fsh-glass-2); border:1px solid var(--fsh-line);
+  color:var(--fsh-ink-2);
+  opacity:0; transform:scale(.8);
+  transition:opacity .16s, transform .16s, color .16s, border-color .16s;
+}
+/* Revealed on hover/focus, but a set favourite stays visible — otherwise you
+   cannot tell what is starred without hunting pill by pill. */
+.fsh-pill-wrap:hover .fsh-fav-btn,
+.fsh-fav-btn:focus-visible,
+.fsh-fav-btn.on { opacity:1; transform:scale(1); }
+.fsh-fav-btn.on { color:var(--fsh-accent); border-color:rgba(var(--fsh-accent-rgb),.45); }
+.fsh-fav-btn:hover { transform:scale(1.15); color:var(--fsh-accent); }
+/* Touch has no hover state, so the control would be undiscoverable. It also
+   needs a bigger target than the 20px badge: it sits right beside the subject
+   you are trying to tap, and a mis-tap silently reorders the rail. The ::after
+   grows the hit area to ~36px while the badge stays small, and because the
+   badge overhangs the pill's corner most of that growth lands outside the
+   pill rather than stealing taps from it. */
+@media (hover: none) {
+  .fsh-fav-btn { opacity:1; transform:scale(1); width:24px; height:24px; font-size:12px; top:-6px; right:-6px; }
+  .fsh-fav-btn::after { content:''; position:absolute; inset:-6px; border-radius:inherit; }
+}
+
+/* Divider between the favourites cluster and everything else. */
+.fsh-rail-sep {
+  flex:0 0 auto; align-self:center;
+  width:1px; height:22px; margin:0 3px;
+  background:var(--fsh-line);
+}
+
+/* ── CHIPS (subject shortcuts in search results) ───────────────────────── */
+.fsh-qchip { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px; cursor:pointer; background:rgba(255,255,255,.04); border:1px solid var(--fsh-line); color:var(--fsh-ink-2); font-size:12px; font-weight:560; white-space:nowrap; transition:transform .16s, color .16s, border-color .16s, background .16s; }
+.fsh-qchip:hover { transform:translateY(-1px); color:var(--fsh-ink); border-color:rgba(var(--fsh-accent-rgb),.45); background:rgba(var(--fsh-accent-rgb),.08); }
+.fsh-qchip .qi { font-size:13px; line-height:1; }
+.fsh-search-key { position:absolute; right:12px; top:50%; transform:translateY(-50%); width:22px; height:22px; display:grid; place-items:center; border-radius:6px; border:1px solid var(--fsh-line); background:rgba(255,255,255,.05); color:var(--fsh-mut); font-size:11.5px; font-weight:600; pointer-events:none; }
+.fsh-search input:focus ~ .fsh-search-key,
+.fsh-search .fsh-search-clear:not([hidden]) ~ .fsh-search-key { display:none; }
+
+/* ── CONTENT SHELL ─────────────────────────────────────────────────────── */
+.fsh-stage { padding:8px 26px 40px; min-height:200px; }
+.fsh-panel { animation:fshFade .45s cubic-bezier(.2,.8,.2,1); }
+@keyframes fshFade { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
+.fsh-section-head { display:flex; align-items:center; gap:12px; margin:18px 2px 14px; }
+.fsh-section-head .fsh-sh-ico { width:38px; height:38px; border-radius:12px; display:grid; place-items:center; font-size:19px; background:var(--fsh-glass); border:1px solid var(--fsh-line); box-shadow:var(--fsh-neu); }
+.fsh-section-head h2 { margin:0; font-size:18px; font-weight:680; letter-spacing:-.01em; }
+.fsh-section-head p { margin:2px 0 0; font-size:12.5px; color:var(--fsh-mut); }
+
+.fsh-card {
+  background:var(--fsh-glass); border:1px solid var(--fsh-line);
+  border-radius:var(--fsh-radius); box-shadow:var(--fsh-shadow);
+  backdrop-filter:blur(22px) saturate(150%); -webkit-backdrop-filter:blur(22px) saturate(150%);
+}
+
+/* ── TAB / SUB-NAV (chemistry tabs + generic subject tool nav) ─────────── */
+.fsh-chem { display:flex; flex-direction:column; gap:18px; }
+.fsh-tabs-wrap { display:flex; flex-direction:column; gap:7px; align-self:flex-start; width:fit-content; max-width:100%; }
+.fsh-chem-tabs { display:flex; flex-wrap:nowrap; gap:4px; padding:5px; scroll-padding-inline:5px; border-radius:999px; background:rgba(10,14,24,.5); border:1px solid var(--fsh-line); box-shadow:var(--fsh-neu-in); width:100%; max-width:100%; position:relative; overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling:touch; scrollbar-width:none; scroll-behavior:smooth; overscroll-behavior-x:contain; }
+.fsh-chem-tabs::-webkit-scrollbar { height:0; display:none; }
+/* Splits the working tools from the reference chips that only pop a modal.
+   flex-shrink:0 because the strip is a nowrap scroller — without it the label
+   is the first thing to collapse when the row overflows, which is exactly when
+   the split matters most. */
+.fsh-tab-divider {
+  flex: 0 0 auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  margin: 0 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--fsh-line);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--fsh-mut);
+  white-space: nowrap;
+  user-select: none;
+}
+/* On a phone the word costs a whole tab's width — Science toolkit's unit
+   converter sat off-screen behind it. The line alone still marks the split. */
+@media (max-width: 600px) {
+  .fsh-tab-divider { font-size: 0; letter-spacing: 0; padding-left: 0; margin: 0 2px; height: 22px; }
+}
+
+/* ── unit row ──────────────────────────────────────────────────────────────
+   The third level: umbrella → subject → unit → tool.
+
+   Above the tab strip rather than inside it. The strip's sliding highlight
+   (#fshTabGlide) measures its own children to work out where to travel, so a
+   second kind of button living in there would be a destination it must never
+   land on.
+
+   Deliberately quieter than .fsh-pill, which is the subject rail: a unit is a
+   filter *within* a subject you have already picked, and styling the two alike
+   would present them as two equal choices. */
+.fsh-units {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+  /* Anchor for the sliding highlight below. */
+  position: relative;
+}
+/* The unit row's highlight, matching .fsh-chem-tab-glide on the tool strip.
+   Without it the unit chips were the one navigation layer in Study Tools that
+   jumped: umbrella, subject and tool all slide, and clicking a unit simply
+   repainted two chips.
+   top/height animate as well as left/width because this row wraps — on a
+   narrow panel the destination chip can be on a different line, and a
+   highlight that only moved horizontally would cut diagonally across the
+   chips instead of travelling along the row. */
+.fsh-unit-glide {
+  position: absolute;
+  left: 0; top: 0; width: 0; height: 0;
+  border-radius: 999px;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(135deg, var(--fsh-accent), color-mix(in srgb, var(--fsh-accent) 58%, #fff 12%));
+  box-shadow: 0 8px 20px -8px rgba(var(--fsh-accent-rgb), .6);
+  transition: left .32s cubic-bezier(.3,.9,.2,1), top .32s cubic-bezier(.3,.9,.2,1),
+              width .32s cubic-bezier(.3,.9,.2,1), height .32s cubic-bezier(.3,.9,.2,1);
+}
+.fsh-unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  /* Above the glide, so the label stays readable as it passes underneath. */
+  position: relative;
+  z-index: 1;
+  /* ~33px tall. The rail around it runs 44 (umbrella) → 39 (subject) →
+     36 (tool), so this sits in the same family rather than looking like a
+     different kind of control. The first pass was 26px, which was fine to
+     look at and too small to hit on a school iPad. Quieter is a colour
+     decision, not a target-size one. */
+  padding: 9px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--fsh-line);
+  background: rgba(10, 14, 24, .45);
+  color: var(--fsh-mut);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: color .18s ease, border-color .18s ease, background .18s ease;
+}
+.fsh-unit:hover { color: var(--fsh-ink); border-color: rgba(var(--fsh-accent-rgb), .45); }
+/* The fill lives on .fsh-unit-glide, not here — that is what lets it travel.
+   The active chip keeps only what cannot slide: its text colour, and a
+   transparent border so it does not gain an outline the others lack.
+   The background stays declared as a fallback for the one frame before the
+   glide is positioned, and for the case where the glide never appears (a
+   single-unit subject, where there is nothing to slide between). */
+.fsh-unit.active {
+  color: #06121c;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.fsh-units:not(:has(.fsh-unit-glide)) .fsh-unit.active {
+  background: linear-gradient(135deg, var(--fsh-accent), color-mix(in srgb, var(--fsh-accent) 58%, #fff 12%));
+  box-shadow: 0 8px 20px -8px rgba(var(--fsh-accent-rgb), .6);
+}
+/* The count carries the row: it says where the tools are before you click,
+   which is the whole reason for grouping them. Tabular figures so a chip does
+   not change width between a 2 and a 7. */
+.fsh-unit-n {
+  font-size: 10.5px;
+  font-weight: 700;
+  opacity: .6;
+  font-variant-numeric: tabular-nums;
+}
+.fsh-unit.active .fsh-unit-n { opacity: .75; }
+@media (max-width: 768px) {
+  .fsh-units { gap: 5px; margin-bottom: 8px; }
+  /* Narrower, not shorter — horizontal padding is what has to give when four
+     chips share a phone width, and height is the part that must not. */
+  .fsh-unit { padding: 9px 11px; font-size: 12px; }
+}
+/* Explicit drag handle for the tab strip. Native scrollbars are overlay-style
+   on macOS — invisible at rest and zero-height — so subjects whose tabs
+   overflow gave no hint that more were off-screen and no way to drag to them.
+   Shown only when the strip actually overflows; see syncTabSlider(). */
+.fsh-tabs-slider { position:relative; height:8px; margin:0 10px; border-radius:999px; background:rgba(255,255,255,.07); border:1px solid var(--fsh-line); cursor:pointer; touch-action:none; }
+.fsh-tabs-slider[hidden] { display:none; }
+.fsh-tabs-thumb { position:absolute; top:0; bottom:0; left:0; border-radius:999px; background:rgba(var(--fsh-accent-rgb),.5); transition:background .16s; }
+.fsh-tabs-slider:hover .fsh-tabs-thumb, .fsh-tabs-thumb.dragging { background:rgba(var(--fsh-accent-rgb),.9); }
+.fsh-chem-tab { border:0; background:transparent; color:var(--fsh-ink-2); cursor:pointer; padding:9px 18px; border-radius:999px; font-size:13.5px; font-weight:600; display:inline-flex; align-items:center; gap:7px; position:relative; z-index:1; transition:color .2s; flex:0 0 auto; white-space:nowrap; }
+/* Fixed slot, and this is load-bearing rather than tidiness.
+
+   flux-iconify replaces each emoji icon with an <svg class="fxi"> ~32ms after
+   render. An emoji's advance width is about 1.17em; the SVG is exactly 1em —
+   so every tab silently narrowed by ~4px *after* the sliding highlight had
+   measured it, and the drift accumulated along the strip (71 of 84 sub-tabs
+   were out, worst by 32px).
+
+   Correcting the highlight afterwards was the wrong fix: the correction
+   interrupted the click's own 0.32s slide, which is the "snap" you could see.
+   Chemistry never did it because its tabs use text glyphs (⊞ ◎ ± ∑) that
+   iconify leaves alone — which is exactly what pointed at the cause.
+
+   Reserving the space means the swap is width-neutral, so there is nothing to
+   correct and nothing to interrupt. 1.2em fits the wider emoji advance; the
+   SVG centres inside it. */
+.fsh-chem-tab .fsh-ct-ico {
+  font-size:15px;
+  width:1.2em; height:1.2em;
+  display:inline-flex; align-items:center; justify-content:center;
+  flex:0 0 auto;
+}
+.fsh-chem-tab.active { color:#04121b; }
+.fsh-chem-tab-glide { position:absolute; top:5px; bottom:5px; border-radius:999px; z-index:0; background:linear-gradient(135deg, var(--fsh-accent), color-mix(in srgb, var(--fsh-accent) 58%, #fff 12%)); box-shadow:0 8px 20px -8px rgba(var(--fsh-accent-rgb),.6); transition:left .32s cubic-bezier(.3,.9,.2,1), width .32s cubic-bezier(.3,.9,.2,1); }
+.fsh-chem-body { min-height:300px; }
+
+/* ── vertical rhythm between stacked cards ────────────────────────────────
+   .fsh-chem-body is a plain block and .fsh-card carries no margin, so a tool
+   that renders one card looked right and a tool that renders two or three
+   glued them edge to edge — the second card's border sat exactly on the
+   first's, with its heading hard against the seam.
+
+   Measured across all 15 subjects and every tool: 14 tools were affected, in
+   exactly two containers — Rhetoric (3), Music (3), Visual Arts (3),
+   Psychology (2), Calculus (2) and Global Politics (1). Chemistry escaped it
+   because its own panels set their own margins, which is why the subject
+   everything else was compared against looked fine.
+
+   Deliberately `> .fsh-card + .fsh-card` and not a descendant rule:
+   .fsh-tools-grid, .fsh-grid and .fsh-atom-wrap already space their cards with
+   `gap`, and a descendant rule would have added 18px on top of that — 36px
+   between every row of the chemistry tools grid. Only top-level card-to-card
+   adjacency is missing spacing, so only that is given any. */
+.fsh-chem-body > .fsh-card + .fsh-card,
+.fsh-chem-body > .fsh-panel > .fsh-card + .fsh-card { margin-top:var(--fsh-gap, 18px); }
+
+/* ── PERIODIC TABLE — boxier rounded tiles, crisp ──────────────────────── */
+.fsh-pt-toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
+.fsh-pt-cats { display:flex; gap:6px; flex-wrap:wrap; }
+.fsh-cat-chip { font-size:11.5px; padding:5px 11px; border-radius:999px; cursor:pointer; border:1px solid var(--fsh-line); background:rgba(255,255,255,.03); color:var(--fsh-ink-2); display:inline-flex; align-items:center; gap:6px; transition:background .18s, color .18s, transform .12s; }
+.fsh-cat-chip:hover { transform:translateY(-1px); }
+.fsh-cat-chip .dot { width:9px; height:9px; border-radius:3px; }
+.fsh-cat-chip.active { color:var(--fsh-ink); background:rgba(255,255,255,.1); }
+.fsh-pt-scroll { overflow-x:auto; padding-bottom:8px; scrollbar-width:thin; }
+.fsh-pt { display:grid; grid-template-columns:repeat(18, minmax(54px,1fr)); gap:7px; min-width:1040px; }
+.fsh-el {
+  aspect-ratio:1/1; border-radius:16px !important; border:1px solid rgba(255,255,255,.14);
+  padding:7px 6px 6px; cursor:pointer; position:relative; overflow:hidden;
+  background:var(--el-c, #1a2236); color:#fff;
+  display:flex; flex-direction:column; justify-content:space-between;
+  box-shadow:0 4px 12px -6px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.18);
+  transition:transform .16s cubic-bezier(.2,.8,.2,1), box-shadow .16s, filter .16s, opacity .2s;
+}
+.fsh-el::after { content:""; position:absolute; inset:0; border-radius:inherit; background:linear-gradient(160deg, rgba(255,255,255,.16), transparent 42%); pointer-events:none; }
+.fsh-el:hover { transform:translateY(-3px) scale(1.05); z-index:5; box-shadow:0 18px 34px -12px rgba(0,0,0,.85); filter:brightness(1.12); }
+.fsh-el .e-n { font-size:10px; opacity:.82; line-height:1; font-weight:600; }
+.fsh-el .e-s { font-size:20px; font-weight:780; line-height:1; letter-spacing:-.01em; }
+.fsh-el .e-m { font-size:8.5px; opacity:.7; line-height:1; }
+.fsh-el.dim { opacity:.18; filter:saturate(.4); }
+.fsh-el.hit { box-shadow:0 0 0 2px var(--fsh-accent), 0 18px 34px -12px rgba(0,0,0,.85); }
+.fsh-pt-spacer { grid-column:span 18; height:8px; }
+.fsh-pt-fnote { grid-column:1 / -1; font-size:11px; color:var(--fsh-mut); padding-left:2px; }
+/* beat the global button pill rule in flux-motion.css (ID outranks its :not() chain) */
+#fshRoot .fsh-el { border-radius:16px !important; }
+#fshRoot .fsh-res { border-radius:var(--fsh-radius) !important; }
+#fshRoot .fsh-iconbtn { border-radius:12px !important; }
+
+.fsh-el[data-cat="alkali"]{--el-c:linear-gradient(150deg,#ff7a59,#e23e57)}
+.fsh-el[data-cat="alkaline"]{--el-c:linear-gradient(150deg,#ffb259,#f47b2f)}
+.fsh-el[data-cat="transition"]{--el-c:linear-gradient(150deg,#5b8def,#3a5bd9)}
+.fsh-el[data-cat="post-transition"]{--el-c:linear-gradient(150deg,#4fb6c9,#2d8aa6)}
+.fsh-el[data-cat="metalloid"]{--el-c:linear-gradient(150deg,#a9c94a,#7f9c22)}
+.fsh-el[data-cat="nonmetal"]{--el-c:linear-gradient(150deg,#37c98a,#1f9e74)}
+.fsh-el[data-cat="halogen"]{--el-c:linear-gradient(150deg,#e9bf3a,#c29314)}
+.fsh-el[data-cat="noble"]{--el-c:linear-gradient(150deg,#b16cf0,#8a3fd6)}
+.fsh-el[data-cat="lanthanide"]{--el-c:linear-gradient(150deg,#e069b4,#c23d96)}
+.fsh-el[data-cat="actinide"]{--el-c:linear-gradient(150deg,#f09ac2,#d5689d)}
+.fsh-el[data-cat="unknown"]{--el-c:linear-gradient(150deg,#5b6478,#414a5e)}
+
+/* element detail */
+.fsh-el-detail { margin-top:16px; }
+.fsh-eld { display:grid; grid-template-columns:auto 1fr; gap:20px; padding:22px; align-items:start; }
+@media (max-width:640px){ .fsh-eld { grid-template-columns:1fr; } }
+.fsh-eld-badge { width:132px; height:132px; border-radius:22px; color:#fff; padding:14px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:var(--fsh-neu); }
+.fsh-eld-badge .b-n { font-size:13px; opacity:.8; }
+.fsh-eld-badge .b-s { font-size:48px; font-weight:800; line-height:.9; }
+.fsh-eld-badge .b-name { font-size:13px; opacity:.95; font-weight:600; }
+.fsh-eld-badge .b-m { font-size:11px; opacity:.78; }
+.fsh-eld-main h3 { margin:0 0 2px; font-size:20px; font-weight:700; }
+.fsh-eld-cat { font-size:12px; color:var(--fsh-mut); text-transform:capitalize; margin-bottom:12px; }
+.fsh-eld-props { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:10px; }
+.fsh-prop { background:rgba(255,255,255,.035); border:1px solid var(--fsh-line); border-radius:12px; padding:9px 11px; }
+.fsh-prop .k { font-size:10.5px; color:var(--fsh-mut); text-transform:uppercase; letter-spacing:.04em; }
+.fsh-prop .v { font-size:14.5px; font-weight:600; margin-top:2px; }
+.fsh-eld-fact { margin-top:13px; font-size:13px; color:var(--fsh-ink-2); line-height:1.55; font-style:italic; }
+.fsh-eld-fact::before { content:"“"; opacity:.5; } .fsh-eld-fact::after { content:"”"; opacity:.5; }
+
+/* ── ATOM MODEL — fixed: electrons centred on shells, crisp ────────────── */
+.fsh-atom-wrap { display:grid; grid-template-columns:1.1fr .9fr; gap:20px; align-items:stretch; }
+@media (max-width:780px){ .fsh-atom-wrap { grid-template-columns:1fr; } }
+.fsh-atom-stage { position:relative; display:grid; place-items:center; min-height:400px; padding:24px; border-radius:var(--fsh-radius); overflow:hidden; background:radial-gradient(circle at 50% 45%, rgba(var(--fsh-accent-rgb),.12), rgba(8,11,20,.6) 62%); border:1px solid var(--fsh-line); box-shadow:var(--fsh-shadow); perspective:1200px; }
+.fsh-atom { position:relative; width:320px; height:320px; transform-style:preserve-3d; transform:rotateX(70deg); }
+.fsh-atom-nucleus { position:absolute; top:50%; left:50%; width:44px; height:44px; margin:-22px 0 0 -22px; border-radius:50%; transform:rotateX(-70deg); background:radial-gradient(circle at 35% 30%, #fff, var(--fsh-accent) 55%, #06121b); box-shadow:0 0 30px 7px rgba(var(--fsh-accent-rgb),.55); display:grid; place-items:center; font-size:14px; font-weight:800; color:#06121b; z-index:60; }
+.fsh-shell { position:absolute; top:50%; left:50%; border-radius:50%; border:1.5px solid rgba(var(--fsh-accent-rgb),.30); transform-style:preserve-3d; transform:translate(-50%,-50%); animation:fshSpin var(--spin,16s) linear infinite; }
+@keyframes fshSpin { to { transform:translate(-50%,-50%) rotateZ(360deg); } }
+/* CRITICAL FIX: electrons centred on the shell (top/left 50%), then placed onto the ring */
+.fsh-e { position:absolute; top:50%; left:50%; width:14px; height:14px; margin:-7px 0 0 -7px; border-radius:50%; background:radial-gradient(circle at 35% 30%, #fff, var(--fsh-accent) 72%); box-shadow:0 0 12px 2px rgba(var(--fsh-accent-rgb),.75); }
+.fsh-atom-controls { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-top:14px; }
+.fsh-atom-info { display:flex; flex-direction:column; gap:12px; }
+.fsh-atom-info .fsh-card { padding:18px; }
+.fsh-atom-picker { display:flex; align-items:center; gap:8px; }
+.fsh-atom-picker input { flex:1; padding:11px 14px; border-radius:12px; background:rgba(10,14,24,.6); border:1px solid var(--fsh-line); color:var(--fsh-ink); font-size:14px; outline:none; box-shadow:var(--fsh-neu-in); }
+/* padding:0 is the one that matters — measured, not guessed.
+   A global button rule was applying padding:10px 18px. With box-sizing:
+   border-box that is 36px of horizontal padding plus 2px of border, which
+   already exceeds the 30px width the timeline's ✕ asks for, so the content box
+   collapsed to *zero* width and the button could not shrink below 38px.
+   place-items:center then centred the glyph on a zero-width box sitting 18px
+   in from the left edge: the ✕ landed at x=24.3 inside a 38px button whose
+   centre is 19. That is the visible offset.
+   line-height:1 fixes the smaller vertical half of it: place-items centres the
+   line box, not the ink, and the inherited ~1.2em box leaves descender slack
+   below the baseline that a glyph like ✕, ‹ or › never uses, so it rode high. */
+.fsh-iconbtn { width:40px; height:40px; flex:0 0 auto; padding:0; border-radius:12px; cursor:pointer; background:var(--fsh-glass-2); border:1px solid var(--fsh-line); color:var(--fsh-ink); font-size:17px; line-height:1; display:grid; place-items:center; box-shadow:var(--fsh-neu); transition:transform .14s, box-shadow .14s; }
+.fsh-iconbtn:hover { transform:translateY(-2px); } .fsh-iconbtn:active { box-shadow:var(--fsh-neu-in); transform:translateY(0); }
+.fsh-shellbars { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+.fsh-shellbar { font-size:12px; padding:5px 10px; border-radius:9px; background:rgba(var(--fsh-accent-rgb),.12); border:1px solid rgba(var(--fsh-accent-rgb),.25); }
+#fshAtomCanvas { width:100%; }
+#fshAtomCanvas canvas { display:block; margin:0 auto; cursor:grab; touch-action:none; border-radius:14px; }
+#fshAtomCanvas canvas:active { cursor:grabbing; }
+.fsh-atom-hint { position:absolute; bottom:10px; left:0; right:0; text-align:center; font-size:11.5px; color:var(--fsh-mut); pointer-events:none; }
+
+/* ── shared form controls (tools/sims) ─────────────────────────────────── */
+.fsh-range { -webkit-appearance:none; appearance:none; height:5px; border-radius:999px; background:rgba(255,255,255,.12); outline:none; flex:1; min-width:120px; }
+.fsh-range::-webkit-slider-thumb { -webkit-appearance:none; width:17px; height:17px; border-radius:50%; background:var(--fsh-accent); cursor:pointer; box-shadow:0 2px 8px rgba(var(--fsh-accent-rgb),.6); }
+.fsh-range::-moz-range-thumb { width:17px; height:17px; border:0; border-radius:50%; background:var(--fsh-accent); cursor:pointer; }
+.fsh-tools-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+@media (max-width:820px){ .fsh-tools-grid { grid-template-columns:1fr; } }
+.fsh-tool { padding:20px; }
+.fsh-tool h3 { margin:0 0 4px; font-size:16px; font-weight:660; display:flex; align-items:center; gap:8px; }
+.fsh-tool .sub { font-size:12px; color:var(--fsh-mut); margin:0 0 14px; }
+.fsh-field { display:flex; gap:8px; flex-wrap:wrap; }
+.fsh-input { flex:1; min-width:120px; padding:12px 14px; border-radius:12px; background:rgba(10,14,24,.6); border:1px solid var(--fsh-line); color:var(--fsh-ink); font-size:14.5px; outline:none; box-shadow:var(--fsh-neu-in); transition:border-color .2s, box-shadow .2s; font-family:"SF Mono",ui-monospace,Menlo,monospace; }
+.fsh-input:focus { border-color:rgba(var(--fsh-accent-rgb),.6); box-shadow:var(--fsh-neu-in),0 0 0 4px rgba(var(--fsh-accent-rgb),.12); }
+.fsh-input.short { flex:0 0 90px; min-width:0; text-align:center; }
+.fsh-btn { border:0; cursor:pointer; padding:12px 18px; border-radius:12px; font-size:13.5px; font-weight:640; color:#04121b; background:linear-gradient(135deg, var(--fsh-accent), color-mix(in srgb, var(--fsh-accent) 58%, #fff 12%)); box-shadow:0 10px 24px -10px rgba(var(--fsh-accent-rgb),.6); transition:transform .14s, filter .14s; white-space:nowrap; }
+.fsh-btn:hover { transform:translateY(-2px); filter:brightness(1.05); } .fsh-btn:active { transform:translateY(0); }
+.fsh-btn.ghost { background:var(--fsh-glass-2); color:var(--fsh-ink); border:1px solid var(--fsh-line); box-shadow:var(--fsh-neu); }
+.fsh-btn.mini { padding:8px 12px; font-size:12px; border-radius:10px; }
+.fsh-chips-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+.fsh-label { font-size:12px; color:var(--fsh-mut); display:flex; align-items:center; justify-content:space-between; gap:10px; margin:10px 0 4px; }
+.fsh-label b { color:var(--fsh-ink); font-variant-numeric:tabular-nums; }
+.fsh-out { margin-top:14px; font-size:14px; color:var(--fsh-ink-2); }
+/* Essay scaffold: Flux AI's answer renders inline here instead of sending the
+   student over to the AI panel. */
+.fsh-es-note { font-size:12.5px; color:var(--fsh-mut); margin-bottom:8px; }
+.fsh-es-note.fsh-es-err { color:#ff8080; }
+.fsh-es-resp {
+  padding:14px 16px; border-radius:12px;
+  background:rgba(var(--fsh-accent-rgb),.06);
+  border:1px solid rgba(var(--fsh-accent-rgb),.2);
+  font-size:13.5px; line-height:1.6; color:var(--fsh-ink);
+  max-height:460px; overflow-y:auto;
+}
+/* fmtAI() renders "## X" as div.ai-h2, not a real heading — tint those to the
+   subject accent so the scaffold's sections are scannable. */
+.fsh-es-resp .ai-h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--fsh-accent); margin:14px 0 4px; }
+.fsh-es-resp .ai-h2:first-child { margin-top:0; }
+.fsh-es-resp strong { color:var(--fsh-ink); }
+.fsh-out .big { font-size:28px; font-weight:740; color:var(--fsh-ink); }
+.fsh-err { color:#fda4af; font-size:13px; margin-top:12px; }
+.fsh-note { font-size:12px; color:var(--fsh-mut); margin-top:8px; }
+
+/* balancer */
+.fsh-eq-out { margin-top:16px; min-height:40px; }
+.fsh-eq { font-size:clamp(18px,3vw,26px); font-weight:600; line-height:1.5; display:flex; flex-wrap:wrap; align-items:center; gap:2px; font-family:"SF Mono",ui-monospace,Menlo,monospace; }
+.fsh-eq .coef { color:var(--fsh-accent); font-weight:780; display:inline-block; animation:fshPop .4s cubic-bezier(.2,1.4,.4,1) both; }
+.fsh-eq .sub { font-size:.66em; vertical-align:-.18em; }
+.fsh-eq .op { color:var(--fsh-mut); margin:0 8px; }
+.fsh-eq .arrow { color:var(--fsh-accent); margin:0 12px; font-weight:700; }
+@keyframes fshPop { from { opacity:0; transform:translateY(-8px) scale(.6); } to { opacity:1; transform:none; } }
+.fsh-eq-type { display:inline-flex; align-items:center; gap:7px; margin-top:14px; font-size:12.5px; color:var(--fsh-ink-2); padding:6px 12px; border-radius:999px; background:rgba(var(--fsh-accent-rgb),.1); border:1px solid rgba(var(--fsh-accent-rgb),.22); }
+
+/* molar mass */
+.fsh-mm-total { font-size:30px; font-weight:740; margin:14px 0 4px; }
+.fsh-mm-total small { font-size:14px; color:var(--fsh-mut); font-weight:500; }
+.fsh-mm-rows { display:flex; flex-direction:column; gap:6px; margin-top:10px; }
+.fsh-mm-row { display:flex; justify-content:space-between; font-size:13px; padding:7px 11px; border-radius:9px; background:rgba(255,255,255,.035); border:1px solid var(--fsh-line); }
+.fsh-mm-row .el { font-weight:640; }
+.fsh-mm-bar { height:5px; border-radius:999px; background:rgba(var(--fsh-accent-rgb),.5); margin-top:5px; }
+
+/* tables (solubility / ions) */
+.fsh-sol-scroll { overflow-x:auto; }
+.fsh-sol { border-collapse:separate; border-spacing:3px; font-size:12px; min-width:560px; }
+.fsh-sol th, .fsh-sol td { padding:7px 9px; text-align:center; border-radius:8px; }
+.fsh-sol th { background:rgba(255,255,255,.05); color:var(--fsh-ink-2); font-weight:620; }
+.fsh-sol td[data-s="S"] { background:rgba(52,211,153,.16); color:#7eecc0; }
+.fsh-sol td[data-s="I"] { background:rgba(248,113,113,.16); color:#fca5a5; }
+.fsh-sol td[data-s="s"] { background:rgba(251,191,36,.14); color:#fcd34d; }
+.fsh-sol-legend { display:flex; gap:14px; margin-top:12px; font-size:12px; color:var(--fsh-mut); flex-wrap:wrap; }
+.fsh-sol-legend span { display:inline-flex; align-items:center; gap:6px; }
+.fsh-sol-legend i { width:12px; height:12px; border-radius:4px; display:inline-block; }
+.fsh-ion-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; }
+.fsh-ion { background:rgba(255,255,255,.04); border:1px solid var(--fsh-line); border-radius:10px; padding:9px 11px; }
+.fsh-ion .f { font-weight:680; font-family:"SF Mono",ui-monospace,Menlo,monospace; }
+.fsh-ion .n { font-size:11px; color:var(--fsh-mut); }
+.fsh-const { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; }
+
+/* worksheet */
+.fsh-ws-controls { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:16px; }
+.fsh-ws-group label { font-size:12px; color:var(--fsh-mut); display:block; margin-bottom:8px; text-transform:uppercase; letter-spacing:.04em; }
+.fsh-seg { display:inline-flex; padding:4px; border-radius:11px; background:rgba(10,14,24,.5); border:1px solid var(--fsh-line); box-shadow:var(--fsh-neu-in); gap:3px; flex-wrap:wrap; }
+.fsh-seg button { border:0; background:transparent; color:var(--fsh-ink-2); cursor:pointer; padding:7px 13px; border-radius:8px; font-size:12.5px; font-weight:560; transition:.18s; }
+.fsh-seg button.active { background:var(--fsh-accent); color:#04121b; font-weight:680; }
+.fsh-ws-preview { margin-top:18px; }
+.fsh-ws-q { display:flex; gap:12px; padding:13px 16px; border-radius:12px; background:rgba(255,255,255,.03); border:1px solid var(--fsh-line); margin-bottom:9px; align-items:center; }
+.fsh-ws-q .num { width:26px; height:26px; flex:0 0 auto; border-radius:50%; background:rgba(var(--fsh-accent-rgb),.16); color:var(--fsh-accent); display:grid; place-items:center; font-size:12px; font-weight:700; }
+.fsh-ws-q .eq { font-family:"SF Mono",ui-monospace,Menlo,monospace; font-size:14.5px; }
+.fsh-ws-q .eq .sub { font-size:.7em; vertical-align:-.15em; }
+.fsh-ws-q .blank { color:var(--fsh-mut); }
+
+/* ── RESOURCE CARDS (secondary "reference sites" strip) ─────────────────── */
+.fsh-grid { display:grid; gap:var(--fsh-gap); grid-template-columns:repeat(auto-fill, minmax(270px,1fr)); }
+.fsh-res { display:flex; flex-direction:column; gap:10px; padding:18px; background:var(--fsh-glass); border:1px solid var(--fsh-line); border-radius:var(--fsh-radius); box-shadow:var(--fsh-shadow); backdrop-filter:blur(20px) saturate(150%); -webkit-backdrop-filter:blur(20px) saturate(150%); text-decoration:none; color:inherit; cursor:pointer; position:relative; overflow:hidden; transition:transform .22s cubic-bezier(.2,.8,.2,1), border-color .22s, box-shadow .22s; }
+.fsh-res::before { content:""; position:absolute; inset:0 0 auto 0; height:3px; background:linear-gradient(90deg, var(--fsh-accent), transparent 80%); opacity:.7; }
+.fsh-res:hover { transform:translateY(-4px); border-color:rgba(var(--fsh-accent-rgb),.45); box-shadow:0 34px 70px -30px rgba(0,0,0,.9), 0 0 0 1px rgba(var(--fsh-accent-rgb),.18) inset; }
+.fsh-res-head { display:flex; align-items:center; gap:10px; }
+.fsh-res-logo { width:40px; height:40px; flex:0 0 auto; border-radius:11px; display:grid; place-items:center; font-size:16px; font-weight:760; color:#04121b; background:linear-gradient(135deg, var(--fsh-accent), color-mix(in srgb, var(--fsh-accent) 60%, #fff 14%)); box-shadow:0 8px 20px -8px rgba(var(--fsh-accent-rgb),.6); }
+.fsh-res-title { font-size:15px; font-weight:660; line-height:1.2; }
+.fsh-res-host { font-size:11.5px; color:var(--fsh-mut); margin-top:1px; }
+.fsh-res-what { font-size:12.5px; color:var(--fsh-ink-2); line-height:1.5; flex:1; }
+.fsh-res-foot { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:2px; }
+.fsh-tags { display:flex; gap:5px; flex-wrap:wrap; }
+.fsh-tag { font-size:10.5px; font-weight:600; padding:3px 8px; border-radius:999px; background:rgba(255,255,255,.05); border:1px solid var(--fsh-line); color:var(--fsh-ink-2); }
+.fsh-verdict { font-size:11px; font-weight:760; padding:3px 9px; border-radius:999px; }
+.fsh-verdict[data-v="A+"], .fsh-verdict[data-v="A"] { background:rgba(52,211,153,.16); color:#5eecb6; border:1px solid rgba(52,211,153,.3); }
+.fsh-verdict[data-v="B"] { background:rgba(251,191,36,.15); color:#fcd34d; border:1px solid rgba(251,191,36,.28); }
+.fsh-verdict[data-v="C"] { background:rgba(148,163,184,.16); color:#cbd5e1; border:1px solid rgba(148,163,184,.28); }
+.fsh-res-open { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:620; color:var(--fsh-accent); }
+
+/* ── PHYSICS / MATH canvases & sims ────────────────────────────────────── */
+.fsh-canvas-wrap { position:relative; border-radius:var(--fsh-radius-sm); overflow:hidden; border:1px solid var(--fsh-line); background:rgba(8,11,20,.55); box-shadow:var(--fsh-neu-in); }
+.fsh-canvas-wrap canvas { display:block; width:100%; height:auto; }
+.fsh-sim-controls { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px 22px; margin-top:14px; }
+.fsh-sim-readout { display:flex; gap:16px; flex-wrap:wrap; margin-top:12px; }
+.fsh-readout-pill { background:rgba(var(--fsh-accent-rgb),.1); border:1px solid rgba(var(--fsh-accent-rgb),.25); border-radius:12px; padding:8px 13px; font-size:13px; }
+.fsh-readout-pill b { display:block; font-size:18px; font-weight:740; font-variant-numeric:tabular-nums; }
+.fsh-formula-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; }
+.fsh-formula { background:rgba(255,255,255,.035); border:1px solid var(--fsh-line); border-radius:12px; padding:11px 13px; }
+.fsh-formula .nm { font-size:11.5px; color:var(--fsh-mut); }
+.fsh-formula .fx { font-size:15px; font-weight:600; margin-top:3px; font-family:"SF Mono",ui-monospace,Menlo,monospace; }
+
+/* ── MUSIC rings (SVG) ─────────────────────────────────────────────────── */
+.fsh-ring-wrap { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,.85fr); gap:20px; align-items:center; }
+@media (max-width:760px){ .fsh-ring-wrap { grid-template-columns:1fr; } }
+.fsh-ring-svg { width:100%; height:auto; max-width:460px; margin:0 auto; display:block; }
+.fsh-ring-seg { cursor:pointer; transition:opacity .18s, transform .18s; transform-origin:center; }
+.fsh-ring-seg:hover { opacity:.88; }
+.fsh-ring-seg.active text { font-weight:800; }
+.fsh-ring-label { font:600 15px ui-sans-serif,system-ui,sans-serif; fill:#fff; text-anchor:middle; dominant-baseline:middle; pointer-events:none; }
+.fsh-ring-label.min { font-size:11px; fill:rgba(255,255,255,.82); }
+.fsh-ring-center { font:700 20px ui-sans-serif,system-ui; fill:var(--fsh-ink); text-anchor:middle; }
+.fsh-keyinfo .row { display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid var(--fsh-line); font-size:13.5px; }
+.fsh-keyinfo .row span:first-child { color:var(--fsh-mut); }
+.fsh-piano { display:flex; position:relative; height:96px; margin-top:8px; user-select:none; }
+.fsh-pkey { flex:1; border:1px solid rgba(0,0,0,.4); border-radius:0 0 6px 6px; background:linear-gradient(#fafdff,#dde6ef); position:relative; }
+.fsh-pkey.on { background:linear-gradient(var(--fsh-accent),color-mix(in srgb,var(--fsh-accent) 60%,#fff)); }
+.fsh-pkey.black { position:absolute; width:6.2%; height:60%; background:linear-gradient(#2a3040,#11151f); border-radius:0 0 5px 5px; z-index:2; }
+.fsh-pkey.black.on { background:linear-gradient(var(--fsh-accent),#127a9c); }
+
+/* ── "next pass" placeholder ───────────────────────────────────────────── */
+.fsh-soon { padding:30px 26px; text-align:center; }
+.fsh-soon .ic { font-size:34px; }
+.fsh-soon h3 { margin:10px 0 4px; font-size:18px; }
+.fsh-soon p { color:var(--fsh-mut); font-size:13.5px; max-width:52ch; margin:0 auto 14px; }
+
+/* ── responsive / motion / low-end ─────────────────────────────────────── */
+@media (max-width:680px){
+  /* Gutter drops to 16px here, so the rail's scroll-padding has to follow it
+     or scrollIntoView goes back to clipping the first pill. */
+  .fsh-hero { padding:18px 16px 2px; } .fsh-rail { padding:6px 16px 12px; scroll-padding-inline:16px; } .fsh-stage { padding:6px 16px 36px; }
+  .fsh-search { min-width:100%; } .fsh-tools-grid { grid-template-columns:1fr; }
+  .fsh-stage { padding-bottom:100px; }
+}
+.fsh-pt-scroll { -webkit-overflow-scrolling:touch; }
+.fsh-rail { -webkit-overflow-scrolling:touch; }
+@media (prefers-reduced-motion:reduce){
+  .fsh-shell { animation:none !important; }
+  .fsh-panel, .fsh-eq .coef { animation:none !important; }
+  .fsh-res:hover, .fsh-el:hover, .fsh-pill:hover, .fsh-iconbtn:hover { transform:none; }
+}
+.flux-lowend .fsh-card, .flux-lowend .fsh-res, .flux-lowend .fsh-pill,
+.flux-lowend .fsh-atom-stage, .flux-lowend .fsh-chem-tabs, .flux-lowend .fsh-canvas-wrap {
+  backdrop-filter:none !important; -webkit-backdrop-filter:none !important; background:var(--card-solid,#121826);
+}
+.flux-lowend .fsh-shell { animation:none !important; }
+.flux-lowend .fsh::before { display:none; }
+
+/* print-only worksheet */
+#fshPrintRoot { display:none; }
+@media print {
+  body > *:not(#fshPrintRoot) { display:none !important; }
+  #fshPrintRoot { display:block !important; position:static; padding:32px; color:#000; font-family:Georgia,serif; }
+  #fshPrintRoot h1 { font-size:22px; margin:0 0 4px; }
+  #fshPrintRoot .meta { font-size:12px; color:#444; margin-bottom:20px; border-bottom:1px solid #ccc; padding-bottom:10px; }
+  #fshPrintRoot .pq { margin:0 0 18px; font-size:15px; }
+  #fshPrintRoot .pq .n { font-weight:700; margin-right:8px; }
+  #fshPrintRoot .ans-key { margin-top:30px; border-top:2px solid #000; padding-top:14px; page-break-before:always; }
+  #fshPrintRoot .ans-key h2 { font-size:16px; }
+  #fshPrintRoot .ak { font-size:13px; margin:4px 0; }
+  #fshPrintRoot sub { font-size:.72em; }
+}
+
+/* ── Desmos header row + palette toggle ───────────────────────────────── */
+.fsh-desmos-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.fsh-desmos-head-text { min-width: 0; }
+.fsh-desmos-theme {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: .74rem;
+  padding: 7px 12px;
+}
+@media (max-width: 560px) {
+  /* Stack rather than squeeze the blurb down to one word per line. */
+  .fsh-desmos-head { flex-direction: column; align-items: stretch; }
+  .fsh-desmos-theme { align-self: flex-start; }
+}
+
+/* ── Desmos graphing calculator host ──────────────────────────────────────
+   Desmos measures its container on init and renders nothing into a zero-height
+   box, so the height must be explicit rather than derived from content. */
+.fsh-desmos {
+  /* An <iframe> (see renderGraph) — inline by default, which leaves a
+     descender gap beneath it. */
+  display: block;
+  width: 100%;
+  height: clamp(380px, 58vh, 620px);
+  border-radius: var(--fsh-radius-sm, 14px);
+  overflow: hidden;
+  border: 1px solid var(--fsh-line, rgba(255, 255, 255, .08));
+  background: var(--fsh-glass, rgba(255, 255, 255, .02));
+}
+@media (max-width: 768px) {
+  /* Leave room for the bottom nav on phones. */
+  .fsh-desmos { height: clamp(320px, 50vh, 480px); }
+}
+
+/* ── Desmos fullscreen ────────────────────────────────────────────────────
+   A fixed-inset overlay rather than the Fullscreen API: requesting real
+   fullscreen on an iframe reloads its document in some browsers (losing the
+   student's equations) and iOS Safari refuses it on iframes altogether. */
+.fsh-desmos-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+
+.fsh-card.fsh-desmos-full {
+  position: fixed;
+  inset: 0;
+  /* Without border-box the safe-area padding is added *to* the height. inset:0
+     alone still came out 34px over on a phone, so the height is pinned: dvh
+     tracks the viewport as mobile browser chrome shows and hides, which vh
+     does not. */
+  box-sizing: border-box;
+  height: 100dvh;
+  max-height: 100dvh;
+  z-index: calc(var(--flux-z-modal, 500) + 30);
+  margin: 0;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--card, #12161f);
+  /* Clear the notch and home indicator when a phone is in fullscreen. */
+  padding: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)) !important;
+}
+.fsh-card.fsh-desmos-full .fsh-desmos-head { flex: 0 0 auto; }
+/* Beat the clamp() height so the graph actually fills the screen. */
+.fsh-card.fsh-desmos-full .fsh-desmos {
+  flex: 1 1 auto;
+  height: auto !important;
+  min-height: 0;
+}
+body.fsh-desmos-locked { overflow: hidden; }
+
+/* ============================================================================
+   LIGHT THEME
+   ----------------------------------------------------------------------------
+   This file was written dark-first (see the header) and had no light path at
+   all, which is why Study Tools was the worst tab in light mode: the subject
+   tab strip painted itself rgba(10,14,24,.5) — near-black at half opacity —
+   then drew --fsh-ink-2 dark-grey labels on top of it. Measured 2.26:1, where
+   4.5:1 is the readable minimum. Ten of the twenty-four contrast failures
+   across the whole planner were on this one tab.
+
+   The dark surfaces come in two families, and both have to invert:
+
+     sunken  rgba(10,14,24,.5-.6) / rgba(8,11,20,.55-.6)
+             inputs, tab strips, segmented controls, the canvas well —
+             "carved into the card", darker than what surrounds them.
+     raised  rgba(255,255,255,.03-.12)
+             chips, table headers, rows, tags — "sitting on the card",
+             lighter than what surrounds them.
+
+   On a white card the first must become a light grey and the second must go
+   white with a border, or it has nothing to contrast against. Everything below
+   is gated on [data-theme="light"]; of the eight entries in THEMES only `light`
+   is light, so the dark path — which is what everyone uses today — is
+   bit-for-bit untouched.
+
+   --fsh-ink-2 is deliberately NOT overridden. It already resolves to #424a53,
+   7.8:1 on white; it only looked broken because of what sat behind it.
+   ========================================================================== */
+
+[data-theme="light"] .fsh {
+  /* Glass panels: same 155deg construction, light stops. */
+  --fsh-glass:linear-gradient(155deg, rgba(255,255,255,.94), rgba(246,248,250,.88));
+  --fsh-glass-2:linear-gradient(155deg, rgba(252,253,255,.92), rgba(240,243,247,.86));
+  /* Was rgba(255,255,255,.1) — white on white, i.e. no border at all. */
+  --fsh-line:var(--border2, rgba(27,31,36,.15));
+  --fsh-shadow:0 26px 60px -30px rgba(31,35,40,.28), 0 2px 0 rgba(255,255,255,.9) inset;
+  /* Neumorphism inverted: light source stays top-left, so the highlight goes
+     white and the shadow drops to a soft grey instead of near-black. */
+  --fsh-neu:-7px -7px 16px rgba(255,255,255,.9), 8px 9px 22px rgba(31,35,40,.14);
+  --fsh-neu-in:inset 4px 4px 10px rgba(31,35,40,.10), inset -4px -4px 10px rgba(255,255,255,.9);
+}
+
+/* ── sunken ──────────────────────────────────────────────────────────────── */
+[data-theme="light"] .fsh-search input,
+[data-theme="light"] .fsh-chem-tabs,
+[data-theme="light"] .fsh-seg,
+[data-theme="light"] .fsh-input,
+[data-theme="light"] .fsh-atom-picker input { background:rgba(234,238,244,.9); }
+[data-theme="light"] .fsh-canvas-wrap { background:rgba(238,241,246,.85); }
+/* Keeps the accent glow, swaps only the near-black floor behind it. */
+[data-theme="light"] .fsh-atom-stage {
+  background:radial-gradient(circle at 50% 45%, rgba(var(--fsh-accent-rgb),.14), rgba(236,240,246,.9) 62%);
+}
+
+/* ── raised ──────────────────────────────────────────────────────────────── */
+[data-theme="light"] .fsh-prop,
+[data-theme="light"] .fsh-mm-row,
+[data-theme="light"] .fsh-ws-q,
+[data-theme="light"] .fsh-formula,
+[data-theme="light"] .fsh-ion,
+[data-theme="light"] .fsh-tag,
+[data-theme="light"] .fsh-sol th,
+[data-theme="light"] .fsh-search-key,
+[data-theme="light"] .fsh-qchip { background:rgba(255,255,255,.96); }
+[data-theme="light"] .fsh-search .fsh-search-clear { background:rgba(31,35,40,.07); }
+[data-theme="light"] .fsh-search .fsh-search-clear:hover { background:rgba(31,35,40,.14); }
+[data-theme="light"] .fsh-cat-chip.active { background:rgba(31,35,40,.09); }
+/* The pill that slides under the active tab, and the slider track: both were
+   white-alpha, which on white left the moving part invisible. */
+[data-theme="light"] .fsh-tabs-slider { background:rgba(31,35,40,.10); }
+[data-theme="light"] .fsh-range { background:rgba(31,35,40,.16); }
+
+/* ── Periodic trends ──────────────────────────────────────────────────────
+   A second chip row under the category one, and a key under the table.
+   Reuses .fsh-cat-chip so the two rows look like siblings rather than two
+   different control styles stacked. */
+.fsh-pt-trends{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  margin:10px 0 2px;
+}
+.fsh-pt-trends-lbl{
+  font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted2);margin-right:2px;
+}
+/* No value for this property — flat and grey, so "not measured" can never be
+   mistaken for "low on the scale". */
+.fsh-pt .fsh-el.trend-none{opacity:.55}
+
+.fsh-pt-key:empty{display:none}
+.fsh-ptk{
+  margin-top:12px;padding:14px 16px;border-radius:14px;
+  background:var(--card2);border:1px solid var(--border);
+}
+.fsh-ptk-scale{display:flex;align-items:center;gap:10px}
+.fsh-ptk-bar{
+  flex:1;height:10px;border-radius:999px;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.12);
+}
+.fsh-ptk-end{
+  font-family:'JetBrains Mono',ui-monospace,monospace;
+  font-size:.76rem;color:var(--muted2);min-width:2.6em;text-align:center;
+}
+.fsh-ptk-dirs{
+  display:grid;gap:4px;margin-top:12px;
+  font-size:.82rem;line-height:1.5;color:var(--text);
+}
+.fsh-ptk-dirs strong{color:var(--accent);margin-right:6px}
+.fsh-ptk-note{
+  margin-top:10px;font-size:.75rem;line-height:1.55;color:var(--muted2);
+}
+@media (max-width:768px){
+  .fsh-ptk-dirs{font-size:.78rem}
+  .fsh-pt-trends{gap:6px}
+}
+
+/* The Flux Periodic Table in Chemistry ▸ Table (flux-ptable.css styles the tool itself). */
+.fsh-ptable { display: grid; gap: 10px; }
+/* The banner above the planner's (simple) table: where the rest of it is. */
+#app .fsh-ptable-full {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  border-radius: 14px; text-decoration: none; color: var(--text, #eaf1ff);
+  border: 1px solid color-mix(in srgb, var(--accent, #00c2ff) 30%, transparent);
+  background: color-mix(in srgb, var(--accent, #00c2ff) 8%, transparent);
+  transition: border-color .15s ease, background .15s ease;
+}
+#app .fsh-ptable-full:hover { border-color: color-mix(in srgb, var(--accent, #00c2ff) 60%, transparent); background: color-mix(in srgb, var(--accent, #00c2ff) 12%, transparent); }
+.fsh-ptable-full-i { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 10px; color: var(--accent, #00c2ff); background: color-mix(in srgb, var(--accent, #00c2ff) 14%, transparent); }
+.fsh-ptable-full-t { flex: 1; min-width: 0; }
+.fsh-ptable-full-t b { display: block; font-size: 13.5px; }
+.fsh-ptable-full-t small { display: block; margin-top: 2px; font-size: 12px; line-height: 1.4; color: var(--muted2, #9fb0cc); }
+.fsh-ptable-full-go { flex: none; font-size: 12.5px; font-weight: 800; color: var(--accent, #00c2ff); }
+@media (max-width: 520px) { .fsh-ptable-full-go { display: none; } }
+
+/* ── Music: enharmonic ring labels, inversions, Roman numerals ─────────── */
+.fsh-ring-label.fsh-ring-alt { font-size: 10.5px; opacity: .75; }
+.fsh-respelled { padding: 8px 11px; border-radius: 10px; background: rgba(var(--fsh-accent-rgb), .08); border: 1px solid rgba(var(--fsh-accent-rgb), .22); color: var(--fsh-ink-2); }
+.fsh-piano--mini { height: 58px; margin: 10px 0 8px; }
+.fsh-pkey.bass { box-shadow: inset 0 -6px 0 #f5b83d; }
+.fsh-inv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; margin-top: 12px; }
+.fsh-inv { padding: 14px; border-radius: 14px; background: rgba(255, 255, 255, .035); border: 1px solid var(--fsh-line); }
+.fsh-inv-h { font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fsh-mut); }
+.fsh-inv-sym { font-size: 24px; font-weight: 800; margin: 4px 0 8px; }
+.fsh-inv-row { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 3px 0; }
+.fsh-inv-row span { color: var(--fsh-mut); }
+.fsh-inv-row small { color: var(--fsh-mut); font-weight: 500; }
+.fsh-btn.fsh-btn--small { padding: 5px 11px; font-size: 12px; min-height: 0; letter-spacing: normal; }
+.fsh-numtable { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 10px; }
+.fsh-numtable th { text-align: left; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--fsh-mut); padding: 6px 8px; border-bottom: 1px solid var(--fsh-line); }
+.fsh-numtable td { padding: 7px 8px; border-bottom: 1px solid var(--fsh-line); vertical-align: middle; }
+.fsh-numtable td.fsh-num { font-weight: 800; font-family: Georgia, 'Times New Roman', serif; font-size: 15px; }
+.fsh-num-alt { font-family: ui-sans-serif, system-ui; font-weight: 500; font-size: 11px; color: var(--fsh-mut); margin-top: 2px; }
+.fsh-numcompare { margin-top: 16px; padding: 12px 14px; border-radius: 12px; background: rgba(176, 108, 240, .07); border: 1px solid rgba(176, 108, 240, .22); }
+.fsh-numcompare-h { font-weight: 700; font-size: 13.5px; margin-bottom: 4px; }
+.fsh-numcompare .fsh-numtable { margin-top: 4px; }
+@media (max-width: 520px) { .fsh-numtable { font-size: 12.5px; } .fsh-numtable td, .fsh-numtable th { padding: 6px 5px; } }
+
+/* ── English: Literature unit ───────────────────────────────────────────── */
+.fsh-gloss-h { font-size: 11.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--fsh-mut); margin: 18px 0 8px; }
+.fsh-gloss > .fsh-gloss-h:first-child { margin-top: 4px; }
+.fsh-steps { margin: 0 0 6px; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 8px; }
+.fsh-steps li { counter-increment: step; display: grid; grid-template-columns: 28px 1fr; column-gap: 10px; align-items: start; font-size: 13.5px; line-height: 1.55; }
+.fsh-steps li::before { content: counter(step); grid-row: span 2; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; font-weight: 800; font-size: 12.5px; background: rgba(var(--fsh-accent-rgb), .16); color: var(--fsh-accent); }
+.fsh-steps li b { display: block; }
+.fsh-steps li span { color: var(--fsh-ink-2); }
+.fsh-lit-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 4px 22px; }
+.fsh-bullets { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.55; color: var(--fsh-ink-2); }
+.fsh-bullets li { margin: 3px 0; }
+.fsh-plan { display: grid; gap: 10px; }
+.fsh-plan-f { display: grid; gap: 4px; font-size: 12px; color: var(--fsh-mut); }
+.fsh-plan-p { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; padding: 12px; border-radius: 12px; border: 1px solid var(--fsh-line); background: rgba(255, 255, 255, .025); }
+.fsh-plan-n { grid-column: 1 / -1; font-weight: 700; font-size: 13px; }
+.fsh-tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.fsh-mediums { min-width: 760px; }
+.fsh-mediums th[scope="row"] { text-align: left; font-size: 12.5px; text-transform: none; letter-spacing: 0; color: var(--fsh-ink); white-space: nowrap; }
+.fsh-mediums td { font-size: 12.5px; line-height: 1.45; color: var(--fsh-ink-2); vertical-align: top; }
+/* On a phone the five-column comparison becomes one block per idea, each
+   entry labelled with its medium, instead of a table to scroll sideways. */
+@media (max-width: 640px) {
+  .fsh-mediums { min-width: 0; }
+  .fsh-mediums thead { display: none; }
+  .fsh-mediums, .fsh-mediums tbody, .fsh-mediums tr, .fsh-mediums th, .fsh-mediums td { display: block; width: auto; }
+  .fsh-mediums tr { padding: 10px 0; border-bottom: 1px solid var(--fsh-line); }
+  .fsh-mediums th[scope="row"] { border: 0; padding: 0 0 6px; font-size: 14px; white-space: normal; }
+  .fsh-mediums td { border: 0; padding: 3px 0; display: grid; grid-template-columns: 104px 1fr; gap: 8px; }
+  .fsh-mediums td::before { content: attr(data-label); font-weight: 700; color: var(--fsh-mut); font-size: 11.5px; }
+}
+
+/* ── Science toolkit: Lab report ────────────────────────────────────────── */
+.fsh-lab-secs { display: grid; gap: 8px; }
+.fsh-lab-sec { border: 1px solid var(--fsh-line); border-radius: 12px; background: rgba(255, 255, 255, .025); padding: 0 14px; }
+.fsh-lab-sec > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 10px; padding: 11px 0; font-weight: 700; font-size: 14px; }
+.fsh-lab-sec > summary::-webkit-details-marker { display: none; }
+.fsh-lab-sec > summary::after { content: '+'; margin-left: auto; color: var(--fsh-mut); font-weight: 600; }
+.fsh-lab-sec[open] > summary::after { content: '−'; }
+.fsh-lab-sec p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.6; color: var(--fsh-ink-2); }
+.fsh-lab-n { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; font-size: 12px; background: rgba(var(--fsh-accent-rgb), .16); color: var(--fsh-accent); }
+.fsh-checks { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.fsh-checks li::before { content: '✓'; color: var(--fsh-accent); font-weight: 800; margin-right: 8px; }
+.fsh-lab-crit { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--fsh-line); margin-bottom: 8px; }
+.fsh-lab-crit-h { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
+.fsh-lab-crit-h span { color: var(--fsh-mut); font-size: 12.5px; white-space: nowrap; }
+.fsh-lab-crit p { margin: 4px 0 0; font-size: 13px; line-height: 1.55; color: var(--fsh-ink-2); }
+.fsh-lab-rules { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.fsh-lab-rule { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--fsh-line); background: rgba(255, 255, 255, .025); font-size: 13px; line-height: 1.5; }
+.fsh-lab-rule b { display: block; margin-bottom: 2px; }
+.fsh-lab-rule span { color: var(--fsh-ink-2); }
+.fsh-lab-calc { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.fsh-lab-steps { margin: 10px 0 0; padding-left: 20px; font-size: 13px; line-height: 1.6; color: var(--fsh-ink-2); }
+.fsh-lab-ta { min-height: 72px; resize: vertical; font: inherit; }
+
+/* "Need more help?" links under each subject (refStrip in flux-study-hub.js) */
+.fsh-help { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:14px 0 4px; padding:12px 14px; border:1px solid var(--border, rgba(255,255,255,.1)); border-radius:14px; }
+.fsh-help-h { font-size:.78rem; font-weight:700; color:var(--muted2, #9aa); margin-right:4px; }
+.fsh-help-a { font-size:.8rem; padding:5px 10px; border-radius:999px; background:rgba(var(--fsh-accent-rgb, 91,141,239), .12); color:var(--text, inherit); text-decoration:none; }
+.fsh-help-a:hover, .fsh-help-a:focus-visible { background:rgba(var(--fsh-accent-rgb, 91,141,239), .24); }

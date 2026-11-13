@@ -1,0 +1,237 @@
+import { test, expect, type Page } from '@playwright/test';
+import { gotoScenario } from './helpers';
+
+/*
+ * P0 A2 — mobile "More" sheet lifecycle.
+ *
+ * Live bug: after opening the More sheet and tapping an item, the sheet stayed
+ * permanently visible. Root cause: the anime.js open spring left an inline
+ * `transform: translateY(0%)` that outlived the animation, so removing the
+ * `.open` class never moved the sheet, and the Escape handler's
+ * `classList.contains('open')` guard short-circuited every later attempt.
+ *
+ * The fix makes closeMobileSheet() idempotent and animation-independent and
+ * judges Escape by geometry. These tests drive the real UI at a phone
+ * viewport and assert the sheet actually leaves the screen every time.
+ */
+
+test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+/** Sheet is closed when it sits below the viewport (geometry, not class state). */
+async function expectSheetClosed(page: Page) {
+  await page.waitForFunction(() => {
+    const sh = document.getElementById('moreSheet');
+    if (!sh) return false;
+    const r = sh.getBoundingClientRect();
+    return r.top >= window.innerHeight - 1 && sh.getAttribute('aria-hidden') === 'true';
+  }, undefined, { timeout: 5_000 });
+}
+
+async function expectSheetOpen(page: Page) {
+  await page.waitForFunction(() => {
+    const sh = document.getElementById('moreSheet');
+    if (!sh) return false;
+    const r = sh.getBoundingClientRect();
+    return r.top < window.innerHeight && sh.classList.contains('open');
+  }, undefined, { timeout: 5_000 });
+}
+
+test.describe('Mobile More sheet lifecycle', () => {
+  test.beforeEach(async ({ page }) => {
+    await gotoScenario(page, 'guest');
+    await expect(page.locator('#moreBtn')).toBeVisible();
+  });
+
+  test('open → X closes', async ({ page }) => {
+    await page.locator('#moreBtn').click();
+    await expectSheetOpen(page);
+    await page.locator('.more-sheet-close').click();
+    await expectSheetClosed(page);
+  });
+
+  test('open → tapping an item navigates AND closes', async ({ page }) => {
+    await page.locator('#moreBtn').click();
+    await expectSheetOpen(page);
+    await page.locator('.more-sheet-item[data-nav-tab="timer"]').click();
+    await expect(page.locator('#timer.panel.active')).toBeVisible();
+    await expectSheetClosed(page);
+  });
+
+  test('open → Escape closes', async ({ page }) => {
+    await page.locator('#moreBtn').click();
+    await expectSheetOpen(page);
+    await page.keyboard.press('Escape');
+    await expectSheetClosed(page);
+  });
+
+  test('B2: Report item lives in the sheet and the floating fab is hidden at phone width', async ({ page }) => {
+    // The bottom-left Report fab overlapped the date header and stats row at
+    // 390px — it collapses into the More sheet on <768px.
+    await expect(page.locator('#fluxReportFab')).toBeHidden();
+    await page.locator('#moreBtn').click();
+    await expectSheetOpen(page);
+    await expect(page.locator('.more-sheet-item[data-action="report"]')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expectSheetClosed(page);
+  });
+
+  test('B2: pomo pill docks into the top bar and clears the bottom nav', async ({ page }) => {
+    const geom = await page.evaluate(() => {
+      const pill = document.getElementById('fluxPomoPill')!;
+      pill.hidden = false;
+      (pill as HTMLElement).style.display = 'flex';
+      const r = pill.getBoundingClientRect();
+      const bnav = document.querySelector('.bottom-nav')?.getBoundingClientRect();
+      const topbar = document.querySelector('.topbar')?.getBoundingClientRect();
+      return {
+        inTopbar: !!topbar && r.top >= topbar.top && r.bottom <= topbar.bottom + 6,
+        clearsBnav: !bnav || r.bottom < bnav.top,
+      };
+    });
+    expect(geom.inTopbar).toBe(true);
+    expect(geom.clearsBnav).toBe(true);
+  });
+
+  test('open → overlay tap closes', async ({ page }) => {
+    await page.locator('#moreBtn').click();
+    await expectSheetOpen(page);
+    // Tap well above the sheet so the hit lands on the overlay.
+    await page.locator('#moreSheetOverlay').click({ position: { x: 20, y: 40 } });
+    await expectSheetClosed(page);
+  });
+
+  test('Escape closes even when the sheet is wedged visible without .open', async ({ page }) => {
+    await page.locator('#moreBtn').click();
+    await expectSheetOpen(page);
+    // Recreate the historical stuck state: inline transform pinning the sheet
+    // on screen while the .open class is already gone.
+    await page.evaluate(() => {
+      const sh = document.getElementById('moreSheet')!;
+      sh.classList.remove('open');
+      sh.style.transform = 'translateY(0px)';
+    });
+    await page.keyboard.press('Escape');
+    await expectSheetClosed(page);
+  });
+
+  test('rapid open/close ×10 never wedges', async ({ page }) => {
+    for (let i = 0; i < 10; i++) {
+      await page.locator('#moreBtn').click();
+      // Close mid-animation to chase the wedge: wait only until the sheet
+      // edge enters the viewport (spring still running), then Escape —
+      // keyboard input has no actionability wait, unlike clicking the X.
+      await page.waitForFunction(() => {
+        const sh = document.getElementById('moreSheet');
+        return !!sh && sh.getBoundingClientRect().top < window.innerHeight;
+      });
+      await page.keyboard.press('Escape');
+    }
+    await expectSheetClosed(page);
+    // Still fully functional afterwards.
+    await page.locator('#moreBtn').click();
+    await expectSheetOpen(page);
+    await page.locator('.more-sheet-item[data-nav-tab="school"]').click();
+    await expect(page.locator('#school.panel.active')).toBeVisible();
+    await expectSheetClosed(page);
+  });
+
+  /*
+   * The sheet is typed out by hand in index.html while the sidebar and drawer
+   * are generated from tabConfig, so the two drifted apart. At 390px the sheet
+   * was still offering "Notebook" — a paused tab, so the button closed the
+   * sheet and left you on the Dashboard — and still said "Timer", "School" and
+   * "Goals" long after the sidebar became "Time", "School Info" and "College
+   * Prep". That is the phone quietly turning into a different app, which is
+   * the thing this redesign exists to stop, so it is worth a test rather than
+   * a one-off correction.
+   */
+  test('the More sheet says the same thing as the drawer, and offers no dead tabs', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const shown = (el: Element) => {
+        const s = getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden';
+      };
+      const drawer: [string, string][] = [];
+      for (const b of Array.from(document.querySelectorAll('.mob-drawer .nav-item'))) {
+        if (!shown(b)) continue;
+        const id = (b as HTMLElement).dataset.tab;
+        if (id) drawer.push([id, b.querySelector('.nl')?.textContent?.trim() || '']);
+      }
+      const sheet = Array.from(document.querySelectorAll('.more-sheet-item[data-nav-tab]'))
+        .filter(shown)
+        .map((b) => ({
+          id: (b as HTMLElement).dataset.navTab as string,
+          label: b.querySelector('.more-sheet-label')?.textContent?.trim() || '',
+        }));
+      return { drawer, sheet };
+    });
+
+    const drawer = new Map(res.drawer);
+    // Both halves must actually be populated, or every assertion below passes
+    // by looking at nothing.
+    expect(drawer.size, 'the drawer rendered no visible nav items').toBeGreaterThan(4);
+    expect(res.sheet.length, 'the More sheet rendered no visible nav items').toBeGreaterThan(4);
+
+    for (const item of res.sheet) {
+      expect(drawer.has(item.id),
+        `More sheet offers "${item.label}" (${item.id}), which the drawer does not — ` +
+        'a tab reachable only from the phone is a tab nobody maintains')
+        .toBe(true);
+      expect(item.label,
+        `More sheet calls ${item.id} "${item.label}" but the drawer calls it "${drawer.get(item.id)}"`)
+        .toBe(drawer.get(item.id));
+    }
+  });
+});
+
+/*
+ * The underline under the bottom bar follows the highlighted button. A
+ * teacher's home panel is teacherDashboard, which lights up Home; the
+ * underline looked up that id itself, found no button for it and went under
+ * More, so Home was lit and More was underlined (2026-10-02).
+ */
+test('a teacher\'s home: the underline sits under Home, the button that is lit', async ({ page }) => {
+  await gotoScenario(page, 'teacher-workflow');
+  await page.evaluate(() => (window as any).nav('teacherDashboard'));
+  await expect(page.locator('.bnav-item[data-tab="dashboard"]')).toHaveClass(/active/);
+  await expect.poll(() => page.evaluate(() => {
+    const bar = document.getElementById('fluxBnavIndicator');
+    const home = document.querySelector('.bnav-item[data-tab="dashboard"]');
+    if (!bar || !home) return 'missing';
+    const b = bar.getBoundingClientRect(), h = home.getBoundingClientRect();
+    const mid = b.left + b.width / 2;
+    return mid > h.left && mid < h.right ? 'under Home' : 'elsewhere';
+  }), { timeout: 3_000 }).toBe('under Home');
+});
+
+/*
+ * The sheet's own buttons are the student tabs. A teacher on a phone got
+ * College Prep, Mood and Study tools, and no way to Lesson Hub, Messages or
+ * Resources, which only the sidebar had (2026-10-02). Educators now get their
+ * sidebar's entries, and each one opens what it opens on a laptop.
+ */
+test('a teacher\'s More sheet offers their own pages, not the student tabs', async ({ page }) => {
+  await gotoScenario(page, 'teacher-workflow');
+  await page.locator('#moreBtn').click();
+  await expectSheetOpen(page);
+  const shown = await page.evaluate(() => [...document.querySelectorAll('#moreSheet .more-sheet-item')]
+    .filter((e) => getComputedStyle(e).display !== 'none')
+    .map((e) => (e.querySelector('.more-sheet-label')?.textContent || '').trim()));
+  for (const t of ['Work hub', 'Messages', 'Lesson Hub', 'Resources', 'Settings']) expect(shown).toContain(t);
+  for (const t of ['College Prep', 'Mood', 'Study tools']) expect(shown).not.toContain(t);
+  await page.locator('#moreSheet .more-sheet-item', { hasText: 'Lesson Hub' }).click();
+  await expectSheetClosed(page);
+  await expect(page.locator('#lessonHub.panel.active')).toBeVisible();
+});
+
+test('the More sheet names Flux Suite, the way to the other Flux apps on a phone', async ({ page }) => {
+  await gotoScenario(page, 'student-semester');
+  await expect(page.locator('.topbar-mob-hub .fxhub-btn')).toBeVisible();
+  await page.locator('#moreBtn').click();
+  await expectSheetOpen(page);
+  const item = page.locator('#moreSheet .more-sheet-item', { hasText: 'Flux Suite' });
+  await expect(item).toBeVisible();
+  await item.click();
+  // The dev server drops .html from the address.
+  await page.waitForURL(/\/suite(\.html)?$/, { waitUntil: 'commit' });
+});

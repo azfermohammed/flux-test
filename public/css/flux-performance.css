@@ -1,0 +1,227 @@
+/**
+ * Flux performance layer — snappier UI, fewer full-screen repaints.
+ * html[data-flux-perf="on"] = “Snappy mode” (default ON; turn off in Settings).
+ * html.flux-reduce-motion = accessibility reduce motion (shares many of the same cuts).
+ */
+
+html.flux-reduce-motion::before,
+html.flux-reduce-motion::after,
+html[data-flux-perf="on"]::before,
+html[data-flux-perf="on"]::after{
+  animation:none!important;
+}
+html.flux-reduce-motion body::before,
+html[data-flux-perf="on"] body::before{
+  animation:none!important;
+  opacity:0.88!important;
+}
+html.flux-reduce-motion::after,
+html[data-flux-perf="on"]::after{
+  opacity:0!important;
+  visibility:hidden!important;
+}
+html.flux-reduce-motion #fluxCursorAmbient,
+html[data-flux-perf="on"] #fluxCursorAmbient{
+  opacity:0!important;
+  visibility:hidden!important;
+  pointer-events:none!important;
+}
+html.flux-reduce-motion #cursorSpotlight,
+html[data-flux-perf="on"] #cursorSpotlight,
+html.flux-reduce-motion #fluxMeshCanvas,
+html[data-flux-perf="on"] #fluxMeshCanvas{
+  display:none!important;
+  visibility:hidden!important;
+  pointer-events:none!important;
+}
+html.flux-reduce-motion body[data-flux-cursor="on"]::after,
+html[data-flux-perf="on"] body[data-flux-cursor="on"]::after{
+  display:none!important;
+  visibility:hidden!important;
+}
+
+/* Cursor-follow glow removed site-wide (spotlight, ambient, halo, login) */
+body[data-flux-cursor="on"]::after,
+#fluxCursorAmbient,
+#cursorSpotlight,
+.flux-cursor-halo,
+.login-cursor-glow,
+#loginCursorGlow {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+.ref-card::before {
+  display: none !important;
+  opacity: 0 !important;
+}
+
+/* Pause decorative infinite loops (GPU-heavy filter / transform layers) */
+html.flux-reduce-motion .flux-dash-card-inner::after,
+html.flux-reduce-motion .flux-mega-card::after,
+html.flux-reduce-motion .flux-ai-strip-inner::after,
+html[data-flux-perf="on"] .flux-dash-card-inner::after,
+html[data-flux-perf="on"] .flux-mega-card::after,
+html[data-flux-perf="on"] .flux-ai-strip-inner::after{
+  animation:none!important;
+  opacity:0!important;
+}
+html.flux-reduce-motion .dash-week-col:first-child .dash-week-bar,
+html[data-flux-perf="on"] .dash-week-col:first-child .dash-week-bar{
+  animation:none!important;
+  filter:none!important;
+}
+html.flux-reduce-motion #dynamicFocusCard:not(:empty),
+html[data-flux-perf="on"] #dynamicFocusCard:not(:empty){
+  animation:none!important;
+}
+html.flux-reduce-motion #countdownCard .dash-v2-countdown-card,
+html[data-flux-perf="on"] #countdownCard .dash-v2-countdown-card{
+  animation:none!important;
+  filter:none!important;
+}
+html.flux-reduce-motion .cal-day.today,
+html[data-flux-perf="on"] .cal-day.today{
+  animation:none!important;
+}
+html.flux-reduce-motion .flux-streak-badge:not([style*='display: none']),
+html[data-flux-perf="on"] .flux-streak-badge:not([style*='display: none']){
+  animation:none!important;
+  filter:none!important;
+}
+
+/* Lighter interaction on task rows (less layout thrash) */
+html[data-flux-perf="on"] .task-item:not(.task-done):hover{
+  transform:none!important;
+}
+
+/* Buttons: skip global lift transform (still color/shadow from components) */
+html[data-flux-perf="on"] button:hover{
+  transform:none!important;
+}
+
+/* ═══ Liquid glass off — flat chrome (loads last; kills sidebar / nav / premium glow) ═══ */
+html[data-flux-glass="off"] .sidebar,
+html[data-flux-glass="off"] body[data-theme="light"] .sidebar{
+  background:var(--card)!important;
+  border-right:1px solid var(--border2)!important;
+  box-shadow:none!important;
+}
+html[data-flux-glass="off"] .sidebar-header,
+html[data-flux-glass="off"] .sidebar-nav,
+html[data-flux-glass="off"] .sidebar-footer,
+html[data-flux-glass="off"] body[data-theme="light"] .sidebar-header,
+html[data-flux-glass="off"] body[data-theme="light"] .sidebar-nav,
+html[data-flux-glass="off"] body[data-theme="light"] .sidebar-footer{
+  background:var(--card2)!important;
+  border:1px solid var(--border2)!important;
+  box-shadow:none!important;
+}
+html[data-flux-glass="off"] .nav-item.active,
+html[data-flux-glass="off"] body[data-theme="light"] .nav-item.active{
+  background:rgba(var(--accent-rgb),.1)!important;
+  box-shadow:none!important;
+}
+html[data-flux-glass="off"] .nav-item.active::before,
+html[data-flux-glass="off"] body[data-theme="light"] .nav-item.active::before{
+  box-shadow:none!important;
+  filter:none!important;
+}
+html[data-flux-glass="off"] .nav-item:hover{
+  box-shadow:none!important;
+}
+html[data-flux-glass="off"] .topbar,
+html[data-flux-glass="off"] body[data-theme="light"] .topbar{
+  background:var(--card)!important;
+  border-bottom:1px solid var(--border2)!important;
+  box-shadow:0 1px 0 rgba(0,0,0,.1)!important;
+}
+html[data-flux-glass="off"] .btn-icon,
+html[data-flux-glass="off"] body[data-theme="light"] .btn-icon{
+  background:var(--card2)!important;
+  box-shadow:none!important;
+}
+html[data-flux-glass="off"] .btn-icon:hover{
+  box-shadow:none!important;
+}
+html[data-flux-glass="off"] .user-card,
+html[data-flux-glass="off"] body[data-theme="light"] .user-card{
+  background:var(--card2)!important;
+  border:1px solid var(--border2)!important;
+  box-shadow:none!important;
+}
+html[data-flux-glass="off"] .bottom-nav,
+html[data-flux-glass="off"] body[data-theme="light"] .bottom-nav{
+  background:var(--card)!important;
+  border-top:1px solid var(--border2)!important;
+  box-shadow:none!important;
+}
+html[data-flux-glass="off"] .mob-drawer,
+html[data-flux-glass="off"] body[data-theme="light"] .mob-drawer{
+  background:var(--card)!important;
+  box-shadow:-4px 0 24px rgba(0,0,0,.2)!important;
+}
+html[data-flux-glass="off"] #dynamicFocusCard,
+html[data-flux-glass="off"] .flux-next-best-card{
+  box-shadow:0 4px 18px rgba(0,0,0,.18)!important;
+  animation:none!important;
+}
+html[data-flux-glass="off"] #dynamicFocusCard:not(:empty){
+  animation:none!important;
+}
+html[data-flux-glass="off"] .focus-card::before{
+  display:none!important;
+}
+html[data-flux-glass="off"] #dashGreeting.dash-v2-greet-title{
+  text-shadow:none!important;
+}
+html[data-flux-glass="off"] .dash-week-col:first-child .dash-week-bar{
+  box-shadow:none!important;
+  animation:none!important;
+  filter:none!important;
+}
+html[data-flux-glass="off"] #countdownCard .dash-v2-countdown-card{
+  animation:none!important;
+  filter:none!important;
+}
+html[data-flux-glass="off"] .task-item:not(.task-done):hover{
+  box-shadow:0 4px 14px rgba(0,0,0,.16)!important;
+  border-color:var(--border2)!important;
+}
+html[data-flux-glass="off"] .task-item.priority-high::before,
+html[data-flux-glass="off"] .task-item.priority-med::before,
+html[data-flux-glass="off"] .task-item.priority-low::before{
+  box-shadow:none!important;
+}
+html[data-flux-glass="off"] .task-item.due-today::before{
+  box-shadow:none!important;
+}
+html[data-flux-glass="off"] .card.card-interactive:hover,
+html[data-flux-glass="off"] .focus-card:hover{
+  box-shadow:0 6px 22px rgba(0,0,0,.2)!important;
+}
+html[data-flux-glass="off"] .cal-day.today{
+  animation:none!important;
+}
+html[data-flux-glass="off"] .cal-day.selected{
+  box-shadow:0 0 0 2px rgba(var(--accent-rgb),.25)!important;
+}
+html[data-flux-glass="off"] .check.done{
+  box-shadow:none!important;
+}
+html[data-flux-glass="off"] .quick-add{
+  background:var(--card2)!important;
+}
+html[data-flux-glass="off"] input:focus,
+html[data-flux-glass="off"] select:focus,
+html[data-flux-glass="off"] textarea:focus{
+  box-shadow:0 0 0 2px rgba(var(--accent-rgb),.12)!important;
+}
+html[data-flux-glass="off"] .ai-irow:focus-within{
+  box-shadow:0 0 0 2px rgba(var(--accent-rgb),.1)!important;
+}
+html[data-flux-glass="off"] .flux-streak-badge:not([style*='display: none']){
+  animation:none!important;
+  filter:none!important;
+}

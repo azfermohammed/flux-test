@@ -1,0 +1,7 @@
+{
+  "ai_proxy_url": "https://bwgtpqvvxunyvxrgvpny.supabase.co/functions/v1/ai-proxy",
+  "app_url": "https://azfermohammed.github.io/flux-test/",
+  "anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ3Z3RwcXZ2eHVueXZ4cmd2cG55Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ1MjUxNDgsImV4cCI6MjExMDEwMTE0OH0.qw7blYD3VE4Q2VcG61VRGtMmld3jhO--jzaM1tu_d4s",
+  "version": "2.0.1",
+  "_notes": "This file is fetched by the browser extension at runtime so URLs are NOT hardcoded. Edit this to redeploy the extension to a new Supabase project without rebuilding the extension."
+}

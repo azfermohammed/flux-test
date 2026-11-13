@@ -1,0 +1,516 @@
+/* ============================================================
+   main.js — boot, routing, and the render loop
+   ------------------------------------------------------------
+   Loaded by index.html as a module.
+
+   Rendering is deliberately simple: views are pure functions from
+   state to an HTML string, and any store change re-renders the current
+   screen. At this size that is fast, and it removes the whole class of
+   bug where the UI and the data drift apart. The two costs of that
+   approach — lost scroll position and lost keyboard focus — are both
+   paid back explicitly in render().
+   ============================================================ */
+
+import * as store from './store.js';
+import { html, raw, esc, dayKey } from './util.js';
+import {
+  icon, toast, closeSheet, closeEmergency, isEmergencyOpen, isSheetOpen,
+  closeWelcome, isWelcomeOpen, focusKey, refocus, poweredByFlux, brandMark,
+} from './ui.js';
+import * as notify from './notify.js';
+import * as fluxlink from './fluxlink.js';
+import * as sync from './sync.js';
+import * as intro from './intro.js';
+
+import * as home     from './views/home.js';
+import * as meds     from './views/meds.js';
+import * as seizures from './views/seizures.js';
+import * as safety   from './views/safety.js';
+import * as profile  from './views/profile.js';
+
+/* ============================================================
+   Routes
+   ============================================================ */
+
+const VIEWS = { home, meds, track: seizures, safety, you: profile };
+const ORDER = ['home', 'meds', 'track', 'safety', 'you'];
+
+const TABS = {
+  home:   { label: 'Home',     icon: 'home' },
+  meds:   { label: 'Meds',     icon: 'pill' },
+  track:  { label: 'Seizures', icon: 'chart' },
+  safety: { label: 'Safety',   icon: 'shield' },
+  you:    { label: 'You',      icon: 'user' },
+};
+
+/* #/sos opens the emergency card on top of the Safety tab. It is what
+   the home-screen shortcut points at: long-press the app icon, tap
+   "Emergency card", and the card is up — no navigation at all. */
+const ALIASES = { sos: 'safety' };
+
+let route = 'home';
+
+const el = {
+  shell:  document.querySelector('.app-shell'),
+  appbar: document.getElementById('appbar'),
+  screen: document.getElementById('screen'),
+  tabbar: document.getElementById('tabbar'),
+};
+
+/* Synara also runs inside Flux (synara.html there), which marks <html>
+   with data-host="flux" and supplies its app switcher as a
+   [data-flux-hub] node. The switcher keeps its own listeners and
+   open/closed state, so it is moved into each freshly rendered app bar
+   rather than rebuilt. Standalone, neither exists and nothing changes. */
+const HOSTED = document.documentElement.dataset.host === 'flux';
+const hostSwitch = document.querySelector('[data-flux-hub]');
+
+function parseHash() {
+  const id = (location.hash || '').replace(/^#\/?/, '').split(/[/?]/)[0];
+  if (ALIASES[id]) return { route: ALIASES[id], sos: id === 'sos' };
+  return { route: ORDER.includes(id) ? id : 'home', sos: false };
+}
+
+export function go(id) {
+  if (!ORDER.includes(id)) return;
+  if (location.hash === `#/${id}`) return;
+  location.hash = `#/${id}`;
+}
+
+/* ============================================================
+   Theme
+   ============================================================ */
+
+/** Reflect the stored theme choice onto <html> and the browser chrome. */
+export function applyTheme(theme) {
+  const root = document.documentElement;
+  if (theme === 'light' || theme === 'dark') root.setAttribute('data-theme', theme);
+  else root.removeAttribute('data-theme');
+
+  // Keep the status bar / title bar colour in step with an explicit
+  // choice; with "system" the two media-scoped tags already do it.
+  const dark = theme === 'dark' ||
+    (theme !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
+    meta.content = theme === 'system'
+      ? (meta.media.includes('dark') ? '#121019' : '#f6f5fa')
+      : (dark ? '#121019' : '#f6f5fa');
+  }
+}
+
+/* ============================================================
+   Render
+   ============================================================ */
+
+/** Doses scheduled today that still have no logged status. */
+function countPendingToday(state) {
+  const today = dayKey();
+  return store.dosesOn(today, state)
+    .filter(({ med, time }) => store.doseStatus(today, med.id, time, state) === 'pending')
+    .length;
+}
+
+function renderTabs(state) {
+  const pending = countPendingToday(state);
+
+  el.tabbar.innerHTML = html`
+    <div class="sidebar-brand">
+      <div class="brand-mark">${raw(brandMark())}</div>
+      <div>
+        <div class="brand-name">Synara</div>
+        <div class="brand-tag">Epilepsy care for school</div>
+      </div>
+    </div>
+    ${raw(ORDER.map((id) => {
+      const tab = TABS[id];
+      const current = id === route;
+      const dot = id === 'meds' && pending > 0;
+      const label = dot
+        ? `${tab.label}, ${pending} ${pending === 1 ? 'dose' : 'doses'} not logged today`
+        : tab.label;
+      return `
+        <button class="tab" data-action="nav" data-to="${id}"
+                ${current ? 'aria-current="page"' : ''} aria-label="${label}">
+          <span class="tab-ico">${icon(tab.icon)}</span>
+          <span class="tab-label">${tab.label}</span>
+          ${dot ? '<span class="tab-dot" aria-hidden="true"></span>' : ''}
+        </button>`;
+    }).join(''))}
+    <button class="sidebar-sos" data-action="open-emergency">
+      ${raw(icon('shield', 18))}
+      <span>Open emergency card</span>
+    </button>
+    ${raw(poweredByFlux('sidebar-powered'))}
+  `;
+}
+
+function renderAppbar(state) {
+  const view = VIEWS[route];
+  const title = view.title ? view.title(state) : TABS[route].label;
+  const sub = view.subtitle ? view.subtitle(state) : '';
+
+  el.appbar.innerHTML = html`
+    <div class="appbar-title">
+      <h1 class="appbar-t">${title}</h1>
+      ${raw(sub ? `<span class="appbar-s">${esc(sub)}</span>` : '')}
+    </div>
+    <button class="sos-btn" data-action="open-emergency"
+            aria-label="Open the emergency seizure card">
+      ${raw(icon('shield', 16))}<span>SOS</span>
+    </button>
+  `;
+  if (hostSwitch) el.appbar.insertBefore(hostSwitch, el.appbar.querySelector('.sos-btn'));
+}
+
+/* While changes can't be saved, every screen says so: nobody should find
+   out by losing a dose they logged. Calm on purpose — nothing flashes. */
+function saveNotice() {
+  const status = store.saveStatus();
+  if (status === 'ok') return '';
+  const memory = status === 'memory';
+  return html`
+    <div class="insight save-notice" data-tone="watch">
+      <span class="insight-ico" aria-hidden="true">${raw(icon('alert', 20))}</span>
+      <span class="insight-body">
+        <span class="insight-t">${memory ? 'Not saving on this device' : 'Changes aren’t saving right now'}</span>
+        <span class="insight-d">${memory
+          ? 'Your browser isn’t letting Synara save, so what you add will be gone when you close it. ' +
+            'Download a backup to keep it. The emergency card still works.'
+          : 'Your browser’s storage is full or blocked. What you see is what was last saved. ' +
+            'The emergency card still works.'}</span>
+        ${raw(memory ? '<button class="btn btn-sm btn-outline mt-3" data-action="data-export">Download a backup</button>' : '')}
+      </span>
+    </div>
+  `;
+}
+
+// The tab last drawn: only a change of tab plays the entrance, never a
+// re-render of the same one (a sync, a tick, a toggle).
+let shownRoute = '';
+
+function renderScreen(state) {
+  const enter = route !== shownRoute ? ' route-enter' : '';
+  shownRoute = route;
+  el.screen.innerHTML = html`
+    <div class="screen-inner${enter}" data-route="${route}">${raw(saveNotice())}${raw(VIEWS[route].render(state))}</div>
+  `;
+}
+
+function render() {
+  const state = store.get();
+
+  // Remember where the user was, so a re-render doesn't throw away
+  // their scroll position or keyboard focus.
+  const top = el.screen.scrollTop;
+  const active = document.activeElement;
+  const inSwitch = hostSwitch && hostSwitch.contains(active);
+  const key = active && !inSwitch && el.shell.contains(active) ? focusKey(active) : null;
+
+  document.title = `${TABS[route].label} · Synara`;
+  applyTheme(state.settings.theme);
+  fluxlink.publish(state);
+  renderTabs(state);
+  renderAppbar(state);
+  renderScreen(state);
+
+  el.screen.scrollTop = top;
+  if (key) refocus(key, el.shell);
+  else if (inSwitch) active.focus();
+}
+
+/* ============================================================
+   First run
+   ------------------------------------------------------------
+   The intro (intro.js) asks before anything is written to storage.
+   The example data is useful for showing the app to someone, but it
+   is somebody else's medical history — a real student has to be able
+   to decline it rather than find it already filled in.
+   ============================================================ */
+
+/* ============================================================
+   Action dispatch
+   ------------------------------------------------------------
+   One delegated listener for the whole app. Views export an `actions`
+   map; those are merged with the global ones below. A handler gets
+   (element, state) and may be async.
+   ============================================================ */
+
+const ACTIONS = {
+  nav(node) {
+    go(node.dataset.to);
+  },
+
+  'close-sheet'() { closeSheet(); },
+  'close-emergency'() { closeEmergency(); },
+
+  /* The skip link. Followed as a link, #screen would reach the router
+     as a route it doesn't know, and send the student to Home. */
+  'skip-to-content'() {
+    el.screen.focus();
+  },
+
+  'open-emergency'() {
+    safety.showEmergency(store.get(), introWaiting ? { onClose: introAfterCard } : undefined);
+  },
+
+  /* The welcome's own way to the emergency card: on a device that has
+     never run Synara, the welcome covers everything else. */
+  'intro-sos'() {
+    if (isWelcomeOpen()) closeWelcome();
+    firstRunCard();
+  },
+
+  /* A section from the setup list (intro.js): leave the intro if it's
+     open, then do exactly what that section's own button does. */
+  'setup-go'(node) {
+    if (isWelcomeOpen()) closeWelcome();
+    run(node.dataset.target, node);
+  },
+
+  reload() {
+    location.reload();
+  },
+};
+
+// Merge each view's actions. A view that needs a name already taken
+// should namespace it rather than silently win.
+for (const view of [...Object.values(VIEWS), intro]) {
+  if (!view.actions) continue;
+  for (const [name, fn] of Object.entries(view.actions)) {
+    if (ACTIONS[name]) console.warn(`[synara] duplicate action "${name}"`);
+    ACTIONS[name] = fn;
+  }
+}
+
+function run(name, node) {
+  const handler = ACTIONS[name];
+  if (!handler) return false;
+  Promise.resolve(handler(node, store.get())).catch((err) => {
+    console.error('[synara] action failed:', name, err);
+    toast(err && err.message === 'save-failed'
+      ? 'Could not save — your browser storage may be full or blocked.'
+      : 'Something went wrong. Please try that again.', 'bad');
+  });
+  return true;
+}
+
+document.addEventListener('click', (e) => {
+  const node = e.target.closest('[data-action]');
+  if (!node || node.tagName === 'FORM') return;
+  if (run(node.dataset.action, node)) e.preventDefault();
+});
+
+/* Enter in a sheet form behaves like its primary button rather than
+   reloading the page. */
+document.addEventListener('submit', (e) => {
+  const form = e.target.closest('form[data-action]');
+  if (!form) return;
+  e.preventDefault();
+  run(form.dataset.action, form);
+});
+
+/* File inputs (import) fire `change`, not `click`. */
+document.addEventListener('change', (e) => {
+  const node = e.target.closest('[data-change]');
+  if (node) run(node.dataset.change, node);
+});
+
+/* ============================================================
+   Boot
+   ============================================================ */
+
+function onHashChange() {
+  const next = parseHash();
+  if (next.route !== route) {
+    route = next.route;
+    if (isEmergencyOpen() && !next.sos) closeEmergency();
+    closeSheet();
+    el.screen.scrollTop = 0;
+    render();
+  }
+  if (next.sos) openSos();
+}
+
+function openSos(opts) {
+  safety.showEmergency(store.get(), opts);
+  // Drop the alias so closing the card and pressing back behave normally —
+  // except on a first run (below), where a reload has to reopen the card.
+  if (!introWaiting) dropSosAlias();
+}
+
+function dropSosAlias() {
+  if (parseHash().sos) history.replaceState(null, '', '#/safety');
+}
+
+/* ============================================================
+   First run that starts on the emergency card
+   ------------------------------------------------------------
+   A teacher's bookmark to #/sos, or a shared link, on a device that has
+   never run Synara — maybe mid-seizure. The card works with nothing set
+   up, so it comes first and the intro waits. The intro starts a record
+   afresh, so it never comes up over one (a seizure just logged), and
+   never while the timer runs or a stopped one hasn't been logged: that
+   would hide the clock behind a welcome screen, and "Look around with
+   example data" would put someone else's emergency card up. Until the
+   intro is done, #/sos stays in the address, so a reload brings the
+   card (and the running timer) straight back.
+   ============================================================ */
+
+let introWaiting = false;
+
+function firstRunCard() {
+  introWaiting = true;
+  openSos({ onClose: introAfterCard });
+}
+
+function introAfterCard() {
+  // After the card has gone, and after whatever closing it opened (the
+  // seizure log sheet) has had its turn.
+  setTimeout(() => {
+    if (!introWaiting) return;
+    if (store.hasData()) {
+      introWaiting = false;
+      dropSosAlias();
+      return;
+    }
+    if (isSheetOpen() || isEmergencyOpen() || isWelcomeOpen() || safety.timerPending()) return;
+    introWaiting = false;
+    intro.show({ fromCard: true });
+  });
+}
+
+/* From the welcome that followed the card, Escape goes back to the card. */
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !isWelcomeOpen() || !intro.cameFromCard()) return;
+  if (isSheetOpen() || isEmergencyOpen()) return;
+  run('intro-sos');
+});
+
+/* Once a record exists, the first run is over: #/sos becomes #/safety. */
+store.subscribe(() => {
+  if (store.hasData()) {
+    introWaiting = false;
+    dropSosAlias();
+  }
+});
+
+/* The home screen shows a live countdown, and every screen has a
+   notion of "today". Once a minute is enough — anything faster is
+   wasted work and, in this app specifically, unnecessary motion. */
+function startClock() {
+  let lastDay = dayKey();
+  setInterval(() => {
+    if (isEmergencyOpen()) return;
+    const today = dayKey();
+    // A new day has its own doses to remind about (notify.js also plans
+    // for midnight; this catches a clock or time-zone change).
+    if (today !== lastDay) notify.schedule();
+    if (route === 'home' || today !== lastDay) render();
+    lastDay = today;
+  }, 60000);
+}
+
+/* The worker keeps what it fetches. Once it is in charge of this page —
+   after the first visit, and after each Flux update empties its cache —
+   fetch the page and its own files through it, so the emergency card
+   opens on a day there's no signal. */
+function keepForOffline() {
+  const files = [...document.querySelectorAll('script[src], link[rel="stylesheet"][href]')]
+    .map((node) => node.getAttribute('src') || node.getAttribute('href'))
+    .filter((url) => !/^([a-z]+:)?\/\//i.test(url));
+  for (const url of [location.pathname, ...files]) fetch(url).catch(() => {});
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  // Inside Flux, Flux's own service worker covers this page. Synara
+  // registers it too (the same one, the planner's way): a student who
+  // never opens the planner still needs it, for the emergency card
+  // offline and for reminders on Android.
+  const register = () => {
+    const done = HOSTED
+      ? navigator.serviceWorker.register(new URL('service-worker.js', location.href), { updateViaCache: 'none' })
+      : navigator.serviceWorker.register('sw.js');
+    done.catch((err) => {
+      // Offline support is a bonus, never a reason to fail to start.
+      console.warn('[synara] service worker not registered:', err);
+    });
+  };
+  if (HOSTED) navigator.serviceWorker.addEventListener('controllerchange', keepForOffline);
+  if (document.readyState === 'complete') register();
+  else window.addEventListener('load', register, { once: true });
+}
+
+async function boot() {
+  // Opened from a sync link (#/home?sync=KEY): take the key out of the
+  // address bar at once; once sync is up, offer to use the synced copy here.
+  const linked = /[?&]sync=([0-9A-Za-z-]+)/.exec(location.hash);
+  if (linked) history.replaceState(null, '', location.pathname + location.search + location.hash.replace(/[?&]sync=[^&]*/, ''));
+  const first = parseHash();
+  route = first.route;
+
+  const { firstRun } = await store.init();
+
+  store.subscribe(render);
+  render();
+
+  // A first run through #/sos, or reloaded while its timer runs, starts
+  // on the card (see "First run that starts on the emergency card").
+  if (firstRun && (first.sos || safety.timerPending())) firstRunCard();
+  // A sync link brings the record with it, so the welcome would only be in the way.
+  else if (firstRun && !linked) intro.show();
+  else if (first.sos) onHashChange();
+
+  window.addEventListener('hashchange', onHashChange);
+  window.matchMedia('(prefers-color-scheme: dark)')
+    .addEventListener('change', () => applyTheme(store.get().settings.theme));
+
+  // Sign-in links go through the planner; it sends the student back here.
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-return="synara"]')) return;
+    try { sessionStorage.setItem('flux_return_to', 'synara.html'); } catch { /* blocked */ }
+  });
+
+  notify.start();
+  registerServiceWorker();
+  startClock();
+
+  // Sync (inside Flux only, once turned on). Its status shows on You; a
+  // conflict is asked about the moment it is found.
+  let askedKey = false;
+  sync.onStatus((s) => {
+    // Home only shows the "enter your sync key" card, so it re-renders
+    // only when that changes, never mid-typing on every sync round.
+    const asking = s.phase === 'needs-key';
+    if (route === 'you' || (route === 'home' && asking !== askedKey)) render();
+    askedKey = asking;
+    if (s.phase === 'conflict' && !isSheetOpen() && !isEmergencyOpen()) profile.showConflict();
+    // A new device signed in to Flux took the synced copy by itself (the
+    // key is kept in the account): the welcome has nothing left to set up.
+    if (firstRun && s.phase === 'idle' && sync.enabled() && isWelcomeOpen()) closeWelcome();
+  });
+  sync.start().then(() => {
+    if (linked && !sync.enabled()) profile.askToJoin(linked[1]);
+  });
+}
+
+/* Whatever went wrong, the emergency card still has to open: it needs
+   nothing but what is already in memory (or standard first aid). */
+boot().catch((err) => {
+  console.error('[synara] failed to start:', err);
+  el.screen.innerHTML = html`
+    <div class="screen-inner">
+      <div class="empty">
+        <span class="empty-ico">${raw(icon('alert', 32))}</span>
+        <span class="empty-t">Synara couldn't start</span>
+        <span class="empty-s">
+          Reloading the page usually fixes it. The emergency card still opens from here.
+        </span>
+        <button class="btn btn-primary" data-action="open-emergency">
+          ${raw(icon('shield', 18))} Open emergency card
+        </button>
+        <button class="btn btn-outline" data-action="reload">Reload</button>
+      </div>
+    </div>
+  `;
+});

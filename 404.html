@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flux Planner</title>
+<script>
+/* GitHub Pages: send any unknown path back to the app (same folder as index.html). */
+(function(){
+  var path=location.pathname||'/';
+  var seg=path.split('/').filter(Boolean);
+  var base='/';
+  if(seg.length) base='/'+seg[0]+'/';
+  var target=base+'index.html'+location.search+location.hash;
+  location.replace(target);
+})();
+</script>
+<meta http-equiv="refresh" content="0;url=index.html">
+</head>
+<body style="margin:0;background:#0B0F1A;color:#e8eaed;font-family:system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:1.5rem">
+  <div>
+    <p style="margin:0 0 12px">Opening Flux…</p>
+    <p style="margin:0"><a href="index.html" style="color:#38bdf8">Open Flux Planner</a></p>
+  </div>
+<meta name="robots" content="noindex"><div style="position:fixed;z-index:2147483647;left:50%;bottom:0;transform:translateX(-50%);padding:2px 10px;border-radius:6px 6px 0 0;background:#f59e0b;color:#111;font:600 11px/1.6 system-ui,sans-serif;pointer-events:none">TEST SITE · tab-line-jump · bb52a16</div></body>
+</html>

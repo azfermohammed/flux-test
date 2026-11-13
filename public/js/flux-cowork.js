@@ -1,0 +1,863 @@
+/**
+ * Flux · Co-work — live study room for any task.
+ *
+ * Two students (or more) co-work on the same assignment:
+ *   - Host opens any task → "Co-work" → spawns a 6-char room code
+ *   - Joiners use ?cowork=ABC123 link OR paste the code into a modal
+ *   - Shared checklist (task.subtasks) syncs in realtime via Supabase channel broadcast
+ *   - Presence shows avatars of everyone in the room
+ *   - Host's task auto-syncs back on every change (so progress survives the session)
+ *
+ * Flag: enable_cowork (defaults ON in the flag defaults map)
+ * No schema changes — uses ephemeral channel broadcast + presence.
+ *
+ * Self-contained IIFE. Exposes window.FluxCowork.
+ */
+(function () {
+  'use strict';
+
+  /* The "Join room" button is pulled from the Tasks toolbar for now (owner
+     request) to cut clutter. Flip to true to bring it back — nothing else
+     about co-work is disabled. */
+  var SHOW_JOIN_ROOM_BUTTON = false;
+
+  /* ---------- helpers ---------- */
+
+  function enabled() {
+    try {
+      return !!window.FluxFeatureFlags?.isEnabled('enable_cowork', true);
+    } catch (_) { return true; }
+  }
+
+  function esc(s) {
+    if (typeof window.esc === 'function') return window.esc(s);
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function toast(msg) {
+    if (typeof window.showToast === 'function') {
+      try { window.showToast(msg, 'info'); return; } catch (_) {}
+    }
+    var t = document.createElement('div');
+    t.className = 'flux-cowork-toast';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    requestAnimationFrame(function () { t.classList.add('is-show'); });
+    setTimeout(function () {
+      t.classList.remove('is-show');
+      setTimeout(function () { t.remove(); }, 220);
+    }, 2200);
+  }
+
+  function getSB() {
+    try {
+      if (typeof window.getSB === 'function') return window.getSB();
+    } catch (_) {}
+    return null;
+  }
+
+  function getCurrentUser() {
+    return (typeof currentUser !== 'undefined' && currentUser) || window.currentUser || null;
+  }
+
+  function getDisplayName(u) {
+    if (!u) return 'You';
+    return u.user_metadata?.full_name
+        || u.user_metadata?.name
+        || u.email?.split('@')[0]
+        || 'Student';
+  }
+
+  function initials(name) {
+    var parts = String(name || '?').trim().split(/\s+/).slice(0, 2);
+    return parts.map(function (p) { return p.charAt(0).toUpperCase(); }).join('') || '?';
+  }
+
+  function makeRoomCode() {
+    var alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
+    var code = '';
+    for (var i = 0; i < 6; i++) {
+      code += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+    }
+    return code;
+  }
+
+  function findTask(id) {
+    var list = Array.isArray(window.tasks) ? window.tasks : [];
+    return list.find(function (t) { return String(t.id) === String(id); }) || null;
+  }
+
+  function persistTasks() {
+    // app.js keeps `save` / `syncKey` block-scoped (NOT on window), so a bare
+    // `window.save` check always no-ops here. Prefer the globally-exposed
+    // FluxStorage.save (canonical cross-module write, same key namespacing) so
+    // host check-offs actually survive a reload; keep legacy globals as fallback.
+    try {
+      if (window.FluxStorage && typeof window.FluxStorage.save === 'function') window.FluxStorage.save('tasks', window.tasks);
+      else if (typeof window.save === 'function') window.save('tasks', window.tasks);
+    } catch (_) {}
+    try {
+      if (typeof window.syncKey === 'function') window.syncKey('tasks', window.tasks);
+      else if (window.FluxSync && typeof window.FluxSync.now === 'function') window.FluxSync.now();
+    } catch (_) {}
+    try { if (typeof window.renderTasks === 'function') window.renderTasks(); } catch (_) {}
+  }
+
+  /* ---------- state ---------- */
+
+  var state = {
+    room: null,          // current room code
+    isHost: false,
+    taskId: null,        // host's source task id (null on joiner)
+    taskTitle: '',
+    subtasks: [],        // [{id, text, done, by}]
+    members: {},         // memberId -> { name, joinedAt, isHost }
+    channel: null,
+    selfId: null,
+    selfName: null,
+    hostGone: false,     // host ended the room — joiners' edits no longer persist
+    savedTaskId: null,   // joiner's own copy of the checklist, once saved
+    activeRooms: new Set(), // for "is-live" indicator on cards
+  };
+
+  /* ---------- DOM ---------- */
+
+  var _closeTimer = null;
+
+  function buildScrim() {
+    var existing = document.getElementById('fluxCoworkScrim');
+    // A close may still be animating out. Cancel its pending removal, or that
+    // timer deletes the scrim we're about to reuse — which is exactly what
+    // happens when you leave a room and join another within 240ms.
+    if (_closeTimer) { clearTimeout(_closeTimer); _closeTimer = null; }
+    if (existing) return existing;
+    var scrim = document.createElement('div');
+    scrim.id = 'fluxCoworkScrim';
+    scrim.className = 'flux-cowork-scrim';
+    scrim.addEventListener('click', function (e) {
+      if (e.target === scrim) leaveRoom();
+    });
+    document.body.appendChild(scrim);
+    return scrim;
+  }
+
+  function renderRoom() {
+    var scrim = buildScrim();
+
+    // This is a full innerHTML rebuild, and it re-runs on EVERY realtime event
+    // (presence sync, remote toggle, remote add). Capture the live edit state
+    // first — otherwise a student loses the step they were half-way through
+    // typing the moment anyone else joins or ticks a box.
+    var prevInput = document.getElementById('fluxCoworkAddInput');
+    var draft = prevInput ? prevInput.value : '';
+    var caret = prevInput ? prevInput.selectionStart : null;
+    var hadFocus = !!(prevInput && document.activeElement === prevInput);
+    var prevList = document.getElementById('fluxCoworkList');
+    var scrollTop = prevList ? prevList.scrollTop : 0;
+
+    var pct = state.subtasks.length
+      ? Math.round(state.subtasks.filter(function (s) { return s.done; }).length / state.subtasks.length * 100)
+      : 0;
+    var memberList = Object.keys(state.members).map(function (id) {
+      return Object.assign({ id: id }, state.members[id]);
+    });
+    var liveCount = memberList.length;
+
+    var avatarsHtml = memberList.slice(0, 6).map(function (m) {
+      var cls = 'flux-cowork-avatar';
+      if (m.id === state.selfId) cls += ' is-self';
+      if (m.isHost) cls += ' is-host';
+      return '<div class="' + cls + '" title="' + esc(m.name) + (m.isHost ? ' (host)' : '') + '">'
+        + esc(initials(m.name)) + '</div>';
+    }).join('');
+    var moreCount = Math.max(0, memberList.length - 6);
+    if (moreCount) {
+      avatarsHtml += '<div class="flux-cowork-avatar" title="' + moreCount + ' more">+' + moreCount + '</div>';
+    }
+
+    var itemsHtml;
+    if (!state.subtasks.length) {
+      itemsHtml = '<div class="flux-cowork-empty">'
+        + '<strong>No checklist yet</strong>'
+        + 'Add the first step below — everyone in the room will see it instantly.'
+        + '</div>';
+    } else {
+      itemsHtml = state.subtasks.map(function (s, i) {
+        var cls = 'flux-cowork-item' + (s.done ? ' is-done' : '');
+        var by = s.by ? '<span class="flux-cowork-item-by">— ' + esc(s.by) + '</span>' : '';
+        return '<div class="' + cls + '" data-sid="' + esc(s.id) + '" data-idx="' + i + '">'
+          + '<div class="flux-cowork-check">' + (s.done ? '✓' : '') + '</div>'
+          + '<div class="flux-cowork-item-text">' + esc(s.text) + '</div>'
+          + by
+          + '</div>';
+      }).join('');
+    }
+
+    // The host owns the only copy that gets written back to a real task, so
+    // once they leave, everyone else is editing something nothing will persist.
+    // Say that plainly and give them the one-click way out.
+    var bannerHtml = state.hostGone
+      ? '<div class="flux-cowork-banner">The host left, so nothing here saves automatically now. '
+        + 'Save it to your own tasks to keep it.</div>'
+      : '';
+
+    // Joiners never had a way to keep the work they just did — the checklist
+    // only ever wrote back to the host's task. This is their copy button.
+    var footHtml = state.isHost
+      ? ''
+      : '<div class="flux-cowork-foot">'
+        + '<button type="button" class="flux-cowork-mini-btn" data-act="save-mine">'
+        + (state.savedTaskId != null ? 'Update my task' : 'Save to my tasks')
+        + '</button>'
+        + '</div>';
+
+    scrim.innerHTML =
+      '<div class="flux-cowork-panel" role="dialog" aria-modal="true" aria-label="Co-work room">'
+      + '<div class="flux-cowork-head">'
+      +   '<div class="flux-cowork-head-title">'
+      +     '<div class="flux-cowork-eyebrow">Co-work · live</div>'
+      +     '<div class="flux-cowork-title">' + esc(state.taskTitle || 'Shared checklist') + '</div>'
+      +   '</div>'
+      +   '<button type="button" class="flux-cowork-close" aria-label="Leave room" data-act="leave">✕</button>'
+      + '</div>'
+      + bannerHtml
+      + '<div class="flux-cowork-code">'
+      +   '<span class="flux-cowork-code-label">Room</span>'
+      +   '<span class="flux-cowork-code-value">' + esc(state.room) + '</span>'
+      +   '<div class="flux-cowork-code-actions">'
+      +     '<button type="button" class="flux-cowork-mini-btn" data-act="copy-code">Copy code</button>'
+      +     '<button type="button" class="flux-cowork-mini-btn" data-act="copy-link">Copy link</button>'
+      +   '</div>'
+      + '</div>'
+      + '<div class="flux-cowork-presence">'
+      +   '<div class="flux-cowork-avatars">' + avatarsHtml + '</div>'
+      +   '<div class="flux-cowork-presence-meta">'
+      +     '<strong>' + liveCount + '</strong> ' + (liveCount === 1 ? 'student here' : 'students here')
+      +   '</div>'
+      + '</div>'
+      + '<div class="flux-cowork-progress">'
+      +   '<span>' + pct + '%</span>'
+      +   '<div class="flux-cowork-progress-bar"><div class="flux-cowork-progress-fill" style="width:' + pct + '%"></div></div>'
+      +   '<span>' + state.subtasks.filter(function (s) { return s.done; }).length + '/' + state.subtasks.length + '</span>'
+      + '</div>'
+      + '<div class="flux-cowork-checklist" id="fluxCoworkList">' + itemsHtml + '</div>'
+      + '<div class="flux-cowork-add">'
+      +   '<input type="text" id="fluxCoworkAddInput" placeholder="Add a step…" maxlength="180" autocomplete="off">'
+      +   '<button type="button" data-act="add">Add</button>'
+      + '</div>'
+      + footHtml
+      + '</div>';
+
+    requestAnimationFrame(function () { scrim.classList.add('is-open'); });
+
+    // wire delegation
+    scrim.querySelector('[data-act="leave"]').addEventListener('click', leaveRoom);
+    scrim.querySelector('[data-act="copy-code"]').addEventListener('click', function () {
+      copyText(state.room);
+      flashBtn(this, 'Copied');
+    });
+    scrim.querySelector('[data-act="copy-link"]').addEventListener('click', function () {
+      var url = shareUrl(state.room);
+      copyText(url);
+      flashBtn(this, 'Copied');
+    });
+    scrim.querySelector('[data-act="add"]').addEventListener('click', addSubtaskFromInput);
+    var input = scrim.querySelector('#fluxCoworkAddInput');
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); addSubtaskFromInput(); }
+    });
+
+    var saveBtn = scrim.querySelector('[data-act="save-mine"]');
+    if (saveBtn) saveBtn.addEventListener('click', function () { saveRoomAsMyTask(this); });
+
+    // checklist clicks
+    scrim.querySelectorAll('.flux-cowork-item').forEach(function (el) {
+      el.addEventListener('click', function () {
+        toggleSubtask(el.getAttribute('data-sid'));
+      });
+    });
+
+    // Put the half-typed step (and the scroll position) back after the rebuild.
+    if (draft) input.value = draft;
+    var listEl = scrim.querySelector('#fluxCoworkList');
+    if (listEl && scrollTop) listEl.scrollTop = scrollTop;
+    if (hadFocus) {
+      input.focus();
+      try { if (caret != null) input.setSelectionRange(caret, caret); } catch (_) {}
+    }
+  }
+
+  function flashBtn(btn, label) {
+    var orig = btn.textContent;
+    btn.textContent = label;
+    btn.classList.add('is-ok');
+    setTimeout(function () {
+      btn.textContent = orig;
+      btn.classList.remove('is-ok');
+    }, 1100);
+  }
+
+  function copyText(s) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(s);
+        return;
+      }
+    } catch (_) {}
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = s; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+    } catch (_) {}
+  }
+
+  function shareUrl(code) {
+    try {
+      var u = new URL(window.location.href);
+      u.searchParams.set('cowork', code);
+      u.hash = '';
+      return u.toString();
+    } catch (_) {
+      return window.location.origin + window.location.pathname + '?cowork=' + code;
+    }
+  }
+
+  function closeScrim() {
+    var scrim = document.getElementById('fluxCoworkScrim');
+    if (!scrim) return;
+    scrim.classList.remove('is-open');
+    if (_closeTimer) clearTimeout(_closeTimer);
+    _closeTimer = setTimeout(function () {
+      _closeTimer = null;
+      try { scrim.remove(); } catch (_) {}
+    }, 240);
+  }
+
+  /* ---------- room lifecycle ---------- */
+
+  function hostRoom(taskId) {
+    var task = findTask(taskId);
+    if (!task) { toast('Task not found'); return; }
+    var user = getCurrentUser();
+    state.room = makeRoomCode();
+    state.isHost = true;
+    state.taskId = task.id;
+    state.taskTitle = task.name || task.title || 'Untitled task';
+    state.subtasks = (task.subtasks || []).map(function (s, i) {
+      return {
+        id: s.id || ('s' + Date.now() + '_' + i),
+        text: s.text || '',
+        done: !!s.done,
+        by: s.by || null,
+      };
+    });
+    state.selfId = (user && user.id) || ('guest_' + Math.random().toString(36).slice(2, 8));
+    state.selfName = getDisplayName(user);
+    state.members = {};
+    state.members[state.selfId] = { name: state.selfName, isHost: true, joinedAt: Date.now() };
+    state.hostGone = false;
+    state.savedTaskId = null;
+    state.activeRooms.add(task.id);
+
+    openChannel();
+    renderRoom();
+    refreshCardIndicators();
+    toast('Room ' + state.room + ' — share the code to invite');
+  }
+
+  function joinRoom(code) {
+    code = String(code || '').trim().toUpperCase();
+    if (!/^[A-Z2-9]{6}$/.test(code)) { toast('Invalid room code'); return; }
+    var user = getCurrentUser();
+    state.room = code;
+    state.isHost = false;
+    state.taskId = null;
+    state.taskTitle = 'Joining…';
+    state.subtasks = [];
+    state.selfId = (user && user.id) || ('guest_' + Math.random().toString(36).slice(2, 8));
+    state.selfName = getDisplayName(user);
+    state.members = {};
+    state.members[state.selfId] = { name: state.selfName, isHost: false, joinedAt: Date.now() };
+    state.hostGone = false;
+    state.savedTaskId = null;
+
+    openChannel();
+    renderRoom();
+    // ask host for current state
+    setTimeout(function () { broadcast('hello', { name: state.selfName }); }, 250);
+  }
+
+  function leaveRoom() {
+    if (!state.room) { closeScrim(); return; }
+    broadcast('bye', { name: state.selfName });
+    // Tell joiners the room is over — their edits stop persisting at this point.
+    if (state.isHost) broadcast('host-left', { name: state.selfName });
+    if (state.isHost && state.taskId != null) {
+      // final writeback
+      writebackToHostTask();
+      state.activeRooms.delete(state.taskId);
+    }
+    if (state.channel) {
+      try { getSB()?.removeChannel(state.channel); } catch (_) {}
+    }
+    state.channel = null;
+    state.room = null;
+    state.isHost = false;
+    state.taskId = null;
+    state.subtasks = [];
+    state.members = {};
+    state.hostGone = false;
+    state.savedTaskId = null;
+    closeScrim();
+    refreshCardIndicators();
+  }
+
+  /* ---------- realtime channel ---------- */
+
+  function openChannel() {
+    var sb = getSB();
+    if (!sb || !state.room) {
+      // No Supabase — operate in local-only mode (host can still use checklist solo)
+      console.warn('[Flux Co-work] Supabase unavailable — running local only');
+      return;
+    }
+    var chName = 'cowork_' + state.room;
+    try {
+      var ch = sb.channel(chName, {
+        config: { presence: { key: state.selfId } },
+      });
+
+      ch.on('broadcast', { event: 'hello' }, function (msg) {
+        var p = msg.payload || {};
+        if (p.from === state.selfId) return;
+        // Host responds with current snapshot
+        if (state.isHost) {
+          broadcast('snapshot', {
+            taskTitle: state.taskTitle,
+            subtasks: state.subtasks,
+          });
+        }
+      });
+
+      ch.on('broadcast', { event: 'snapshot' }, function (msg) {
+        if (state.isHost) return;
+        var p = msg.payload || {};
+        if (p.taskTitle) state.taskTitle = p.taskTitle;
+        if (Array.isArray(p.subtasks)) state.subtasks = p.subtasks.slice();
+        renderRoom();
+      });
+
+      ch.on('broadcast', { event: 'toggle' }, function (msg) {
+        var p = msg.payload || {};
+        if (p.from === state.selfId) return;
+        var s = state.subtasks.find(function (x) { return x.id === p.id; });
+        if (!s) return;
+        s.done = !!p.done;
+        s.by = p.by || s.by;
+        renderRoom();
+        flashItem(p.id);
+        if (state.isHost) writebackToHostTask();
+      });
+
+      ch.on('broadcast', { event: 'add' }, function (msg) {
+        var p = msg.payload || {};
+        if (p.from === state.selfId) return;
+        if (!p.item || state.subtasks.some(function (s) { return s.id === p.item.id; })) return;
+        state.subtasks.push(p.item);
+        renderRoom();
+        if (state.isHost) writebackToHostTask();
+      });
+
+      ch.on('broadcast', { event: 'host-left' }, function (msg) {
+        if (state.isHost) return;
+        state.hostGone = true;
+        renderRoom();
+        toast('The host ended the room — save your checklist to keep it.');
+      });
+
+      ch.on('broadcast', { event: 'bye' }, function (msg) {
+        var p = msg.payload || {};
+        if (p.from && state.members[p.from]) {
+          delete state.members[p.from];
+          renderRoom();
+        }
+      });
+
+      ch.on('presence', { event: 'sync' }, function () {
+        var pres = ch.presenceState ? ch.presenceState() : {};
+        var next = {};
+        // keep self
+        next[state.selfId] = state.members[state.selfId] || {
+          name: state.selfName, isHost: state.isHost, joinedAt: Date.now(),
+        };
+        Object.keys(pres).forEach(function (key) {
+          var entries = pres[key];
+          var e = Array.isArray(entries) ? entries[0] : entries;
+          if (!e) return;
+          next[key] = {
+            name: e.name || 'Student',
+            isHost: !!e.isHost,
+            joinedAt: e.joinedAt || Date.now(),
+          };
+        });
+        state.members = next;
+        renderRoom();
+      });
+
+      ch.subscribe(function (status) {
+        if (status === 'SUBSCRIBED') {
+          try {
+            ch.track({
+              name: state.selfName,
+              isHost: state.isHost,
+              joinedAt: Date.now(),
+            });
+          } catch (_) {}
+        }
+      });
+      state.channel = ch;
+    } catch (e) {
+      console.warn('[Flux Co-work] channel failed', e);
+    }
+  }
+
+  function broadcast(event, payload) {
+    if (!state.channel) return;
+    try {
+      state.channel.send({
+        type: 'broadcast',
+        event: event,
+        payload: Object.assign({ from: state.selfId, t: Date.now() }, payload || {}),
+      });
+    } catch (e) {
+      console.warn('[Flux Co-work] broadcast failed', e);
+    }
+  }
+
+  /* ---------- checklist ops ---------- */
+
+  function toggleSubtask(sid) {
+    var s = state.subtasks.find(function (x) { return x.id === sid; });
+    if (!s) return;
+    s.done = !s.done;
+    s.by = state.selfName;
+    flashItem(sid);
+    renderRoom();
+    broadcast('toggle', { id: sid, done: s.done, by: state.selfName });
+    if (state.isHost) writebackToHostTask();
+  }
+
+  function addSubtaskFromInput() {
+    var input = document.getElementById('fluxCoworkAddInput');
+    if (!input) return;
+    var text = (input.value || '').trim();
+    if (!text) return;
+    var item = {
+      id: 'c' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      text: text,
+      done: false,
+      by: state.selfName,
+    };
+    state.subtasks.push(item);
+    input.value = '';
+    renderRoom();
+    document.getElementById('fluxCoworkAddInput')?.focus();
+    broadcast('add', { item: item });
+    if (state.isHost) writebackToHostTask();
+  }
+
+  function flashItem(sid) {
+    setTimeout(function () {
+      var el = document.querySelector('.flux-cowork-item[data-sid="' + sid + '"]');
+      if (!el) return;
+      el.classList.add('just-checked');
+      setTimeout(function () { el.classList.remove('just-checked'); }, 650);
+    }, 0);
+  }
+
+  /* Joiners get no writeback (the host owns the source task), so without this
+     everything they contribute dies with the room. Creates a real task on the
+     first click, then updates that same task on later clicks. */
+  function saveRoomAsMyTask(btn) {
+    if (!Array.isArray(window.tasks)) { toast('Tasks are still loading — try again in a moment.'); return; }
+    var t = state.savedTaskId != null ? findTask(state.savedTaskId) : null;
+    if (!t) {
+      var title = state.taskTitle && state.taskTitle !== 'Joining…'
+        ? state.taskTitle
+        : ('Co-work room ' + state.room);
+      t = {
+        id: Date.now(),
+        name: title,
+        date: (typeof window.todayStr === 'function' ? window.todayStr() : ''),
+        subject: '',
+        priority: 'med',
+        type: 'hw',
+        estTime: 0,
+        difficulty: 3,
+        notes: 'Saved from co-work room ' + (state.room || ''),
+        subtasks: [],
+        done: false,
+        rescheduled: 0,
+        createdAt: Date.now(),
+        scope: 'school',
+      };
+      try { if (typeof window.calcUrgency === 'function') t.urgencyScore = window.calcUrgency(t); } catch (_) {}
+      window.tasks.unshift(t);
+      state.savedTaskId = t.id;
+    }
+    t.subtasks = state.subtasks.map(function (s) {
+      return { id: s.id, text: s.text, done: !!s.done, by: s.by || undefined };
+    });
+    persistTasks();
+    if (btn) {
+      // Not flashBtn(): that restores the *old* label, and after the first save
+      // the button's job changes from create to update.
+      btn.textContent = 'Saved ✓';
+      btn.classList.add('is-ok');
+      setTimeout(function () {
+        btn.textContent = 'Update my task';
+        btn.classList.remove('is-ok');
+      }, 1100);
+    } else {
+      toast('Saved to your tasks');
+    }
+  }
+
+  function writebackToHostTask() {
+    if (!state.isHost || state.taskId == null) return;
+    var t = findTask(state.taskId);
+    if (!t) return;
+    t.subtasks = state.subtasks.map(function (s) {
+      return { id: s.id, text: s.text, done: !!s.done, by: s.by || undefined };
+    });
+    persistTasks();
+  }
+
+  /* ---------- join modal ---------- */
+
+  function openJoinModal() {
+    var existing = document.getElementById('fluxCoworkJoinScrim');
+    if (existing) existing.remove();
+    var scrim = document.createElement('div');
+    scrim.id = 'fluxCoworkJoinScrim';
+    scrim.className = 'flux-cowork-scrim';
+    scrim.innerHTML =
+      '<div class="flux-cowork-join">'
+      + '<h3>Join a co-work room</h3>'
+      + '<p>Paste the 6-letter code your friend shared.</p>'
+      + '<input id="fluxCoworkJoinInput" type="text" maxlength="6" autocomplete="off" inputmode="latin" placeholder="ABC123">'
+      + '<div class="flux-cowork-join-actions">'
+      +   '<button type="button" data-act="cancel">Cancel</button>'
+      +   '<button type="button" class="is-primary" data-act="join">Join</button>'
+      + '</div>'
+      + '</div>';
+    document.body.appendChild(scrim);
+    requestAnimationFrame(function () { scrim.classList.add('is-open'); });
+
+    var input = scrim.querySelector('#fluxCoworkJoinInput');
+    setTimeout(function () { input.focus(); }, 80);
+
+    function close() {
+      scrim.classList.remove('is-open');
+      setTimeout(function () { try { scrim.remove(); } catch (_) {} }, 200);
+    }
+    function go() {
+      var code = (input.value || '').trim().toUpperCase();
+      if (!/^[A-Z2-9]{6}$/.test(code)) { input.style.borderColor = '#ef4444'; return; }
+      close();
+      joinRoom(code);
+    }
+    scrim.querySelector('[data-act="cancel"]').addEventListener('click', close);
+    scrim.querySelector('[data-act="join"]').addEventListener('click', go);
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') go();
+      else if (e.key === 'Escape') close();
+    });
+    scrim.addEventListener('click', function (e) { if (e.target === scrim) close(); });
+  }
+
+  /* ---------- entry points called from task cards ---------- */
+
+  function openForTask(taskId) {
+    if (!enabled()) return;
+    if (state.room) {
+      // Re-opening the panel is the right call for the task we're already
+      // hosting; for a different one it used to silently show the wrong
+      // checklist, which reads as "the button is broken".
+      if (state.taskId != null && String(state.taskId) !== String(taskId)) {
+        toast('You’re already in room ' + state.room + ' — leave it first to start another.');
+      }
+      renderRoom();
+      return;
+    }
+    hostRoom(taskId);
+  }
+
+  /* ---------- task-card "Co-work" button injection ---------- */
+
+  function refreshCardIndicators() {
+    document.querySelectorAll('.task-action-btn--cowork').forEach(function (btn) {
+      var tid = btn.getAttribute('data-task-id');
+      if (state.activeRooms.has(Number(tid)) || state.activeRooms.has(tid)) {
+        btn.classList.add('is-live');
+      } else {
+        btn.classList.remove('is-live');
+      }
+    });
+  }
+
+  function injectButtons() {
+    // Off. Task cards are capped at four buttons (see the comment above
+    // .task-actions in app.js) and co-work is being retired, so this is the
+    // first to go. Everything below still works — rooms, presence, openForTask,
+    // and the FluxCowork lifecycle flux-study-rooms-v2.js wraps — it is simply
+    // no longer advertised from the card. Delete this return to bring it back.
+    return;
+    // eslint-disable-next-line no-unreachable
+    if (!enabled()) return;
+    var cards = document.querySelectorAll('.task-item, .task-card');
+    cards.forEach(function (card) {
+      var actions = card.querySelector('.task-actions');
+      if (!actions) return;
+      if (actions.querySelector('.task-action-btn--cowork')) return;
+      // find task id from any sibling onclick="...openEdit(123)" or data-attr
+      var tid = card.getAttribute('data-task-id');
+      if (!tid) {
+        var ed = actions.querySelector('[onclick*="openEdit("]');
+        if (ed) {
+          var m = ed.getAttribute('onclick').match(/openEdit\((\d+)\)/);
+          if (m) tid = m[1];
+        }
+      }
+      if (!tid) return;
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'task-action-btn task-action-btn--cowork';
+      btn.title = 'Co-work on this assignment';
+      btn.setAttribute('aria-label', 'Co-work on this assignment');
+      btn.setAttribute('data-task-id', tid);
+      // Emoji, not an inline SVG: flux-iconify (core bundle) swaps it for the
+      // "users" stroke icon at render time, same as every other card button.
+      btn.innerHTML = '👥';
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        openForTask(Number(tid));
+      });
+      // insert before the edit button if present, else append
+      var edBtn = actions.querySelector('[onclick*="openEdit("]');
+      if (edBtn) actions.insertBefore(btn, edBtn);
+      else actions.appendChild(btn);
+    });
+    refreshCardIndicators();
+  }
+
+  /* The room panel offers "Copy code", but until now there was nowhere to type
+     one in — joining only worked via a ?cowork= link. This is the missing half. */
+  function injectJoinEntry() {
+    if (!enabled()) return;
+    // Hidden from the Tasks toolbar for now (owner request). Joining by
+    // ?cowork= link and the room panel itself both still work.
+    if (!SHOW_JOIN_ROOM_BUTTON) return;
+    if (document.getElementById('fluxCoworkJoinBtn')) return;
+    var bar = document.querySelector('.dash-workspace .dash-toolbar');
+    if (!bar) return;
+    var b = document.createElement('button');
+    b.id = 'fluxCoworkJoinBtn';
+    b.type = 'button';
+    b.className = 'view-btn tmode-btn flux-cowork-join-btn';
+    b.title = 'Join a co-work room with a 6-letter code';
+    b.setAttribute('aria-label', 'Join a co-work room');
+    b.innerHTML = '👥 Join room';
+    b.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openJoinModal();
+    });
+    bar.appendChild(b);
+  }
+
+  function watchTaskList() {
+    // Wrap renderTasks to re-inject after each render
+    if (window.__fluxCoworkWrapped) return;
+    window.__fluxCoworkWrapped = true;
+    var orig = window.renderTasks;
+    if (typeof orig === 'function') {
+      window.renderTasks = function () {
+        var r = orig.apply(this, arguments);
+        try { injectButtons(); } catch (_) {}
+        return r;
+      };
+    }
+    // Also observe the task list container for dynamic additions
+    var list = document.getElementById('taskList');
+    if (list && window.MutationObserver) {
+      var mo = new MutationObserver(function () {
+        // debounce
+        clearTimeout(window.__fluxCoworkInjectT);
+        window.__fluxCoworkInjectT = setTimeout(injectButtons, 50);
+      });
+      mo.observe(list, { childList: true, subtree: true });
+    }
+    injectButtons();
+  }
+
+  /* ---------- URL auto-join ---------- */
+
+  function checkUrl() {
+    try {
+      var url = new URL(window.location.href);
+      var code = url.searchParams.get('cowork');
+      if (!code) return;
+      // strip from URL so refresh doesn't re-trigger
+      url.searchParams.delete('cowork');
+      window.history.replaceState(null, '', url.toString());
+      // small delay so the rest of the app boots first
+      setTimeout(function () { joinRoom(code); }, 600);
+    } catch (_) {}
+  }
+
+  /* ---------- public surface ---------- */
+
+  window.FluxCowork = {
+    enabled: enabled,
+    openForTask: openForTask,
+    openJoinModal: openJoinModal,
+    joinRoom: joinRoom,
+    leaveRoom: leaveRoom,
+    saveRoomAsMyTask: saveRoomAsMyTask,
+    injectJoinEntry: injectJoinEntry,
+    state: function () { return state; },
+  };
+
+  // Expose a global helper for onclick attributes too
+  window.fluxOpenCowork = openForTask;
+  window.fluxJoinCowork = openJoinModal;
+
+  /* ---------- boot ---------- */
+
+  function boot() {
+    if (!enabled()) return;
+    watchTaskList();
+    injectJoinEntry();
+    // The dashboard toolbar is rendered by app.js after boot on some paths.
+    setTimeout(injectJoinEntry, 1200);
+    document.addEventListener('flux-nav', function (e) {
+      if (e && e.detail && e.detail.panel === 'dashboard') setTimeout(injectJoinEntry, 200);
+    });
+    checkUrl();
+    // Esc closes the room
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && state.room) {
+        var scrim = document.getElementById('fluxCoworkScrim');
+        if (scrim) leaveRoom();
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();

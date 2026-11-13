@@ -1,0 +1,276 @@
+/**
+ * P11-SYLLABUS-CONFLICT — schedule conflict detection (dashboard banner + calendar markers).
+ * Flag: enable_syllabus_conflict_check (default off). Falls back to renderExamConflictBanner.
+ */
+(function () {
+  'use strict';
+
+  const FLAG = 'enable_syllabus_conflict_check';
+  const ASSESS_TYPES = new Set(['test', 'quiz']);
+  const WORK_TYPES = new Set(['hw', 'essay', 'project', 'lab', 'reading']);
+
+  function enabled() {
+    try {
+      return !!window.FluxFeatureFlags?.isEnabled(FLAG, false);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function T(key, vars) {
+    if (typeof window.fluxT === 'function') return window.fluxT(key, vars);
+    return key;
+  }
+
+  function esc(s) {
+    if (typeof window.esc === 'function') return window.esc(s);
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function fmtDay(iso) {
+    if (typeof window.fmtFluxDate === 'function') return window.fmtFluxDate(iso, 'short');
+    return iso || '';
+  }
+
+  function taskList() {
+    if (typeof window.tasks !== 'undefined' && Array.isArray(window.tasks)) return window.tasks;
+    try {
+      if (typeof window.load === 'function') return window.load('tasks', []);
+    } catch (_) {}
+    return [];
+  }
+
+  function normName(t) {
+    return String(t?.name || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  function subjectKey(t) {
+    return String(t?.subject || t?.classId || 'general').toLowerCase().trim();
+  }
+
+  /* t.subject is a class key, 'CLS' + the class id, and Canvas class ids are
+     fractional (Date.now()+Math.random()). Look the readable name up in the
+     planner's subjects rather than printing the key; a key that lost its
+     fraction somewhere (parseInt) still finds its class by the whole part. */
+  function subjectLabel(t) {
+    const key = String(t?.subject || (t?.classId != null ? 'CLS' + t.classId : ''));
+    try {
+      const subs = typeof window.getSubjects === 'function' ? window.getSubjects() : {};
+      let sub = subs[key];
+      if (!sub && /^CLS/i.test(key)) {
+        const parse = typeof window.fluxParseId === 'function' ? window.fluxParseId : Number;
+        const whole = Math.trunc(Number(parse(key.slice(3))));
+        if (Number.isFinite(whole)) {
+          const hit = Object.keys(subs).find((k) => Math.trunc(Number(parse(k.slice(3)))) === whole);
+          if (hit) sub = subs[hit];
+        }
+      }
+      if (sub && sub.name) return sub.name;
+    } catch (_) {}
+    // Never show a raw id: a class that has since been deleted is just "a class".
+    return /^CLS/i.test(key) ? 'A class' : key;
+  }
+
+  function openTasks() {
+    return taskList().filter((t) => t && !t.done && t.date);
+  }
+
+  function groupByDate(list) {
+    const by = {};
+    list.forEach((t) => {
+      const d = String(t.date).slice(0, 10);
+      if (!by[d]) by[d] = [];
+      by[d].push(t);
+    });
+    return by;
+  }
+
+  function detectConflicts() {
+    const list = openTasks();
+    const byDate = groupByDate(list);
+    const issues = [];
+
+    Object.entries(byDate).forEach(([date, items]) => {
+      const assess = items.filter((t) => ASSESS_TYPES.has(t.type));
+      if (assess.length >= 2) {
+        issues.push({
+          kind: 'exam_stack',
+          date,
+          message: T('syllabus.exam_stack', { date: fmtDay(date + 'T12:00'), n: assess.length }),
+        });
+      }
+
+      if (items.length >= 4) {
+        issues.push({
+          kind: 'heavy_day',
+          date,
+          message: T('syllabus.heavy_day', { date: fmtDay(date + 'T12:00'), n: items.length }),
+        });
+      }
+
+      const bySubject = {};
+      items.forEach((t) => {
+        // Tasks with no class all share the 'general' key; a test in one and
+        // homework in another is not a clash within one subject.
+        if (!t.subject && !t.classId) return;
+        const sk = subjectKey(t);
+        if (!bySubject[sk]) bySubject[sk] = { assess: 0, work: 0, name: subjectLabel(t) };
+        if (ASSESS_TYPES.has(t.type)) bySubject[sk].assess += 1;
+        else if (WORK_TYPES.has(t.type)) bySubject[sk].work += 1;
+      });
+      Object.values(bySubject).forEach((row) => {
+        if (row.assess && row.work) {
+          issues.push({
+            kind: 'subject_clash',
+            date,
+            message: T('syllabus.subject_clash', {
+              date: fmtDay(date + 'T12:00'),
+              subject: row.name,
+            }),
+          });
+        }
+      });
+
+      const names = new Map();
+      items.forEach((t) => {
+        const n = normName(t);
+        if (!n || n.length < 4) return;
+        const k = n + '|' + subjectKey(t);
+        if (!names.has(k)) names.set(k, []);
+        names.get(k).push(t);
+      });
+      names.forEach((dupes, key) => {
+        if (dupes.length < 2) return;
+        issues.push({
+          kind: 'duplicate_due',
+          date,
+          message: T('syllabus.duplicate_due', {
+            date: fmtDay(date + 'T12:00'),
+            name: dupes[0].name || key.split('|')[0],
+          }),
+        });
+      });
+    });
+
+    const seen = new Set();
+    return issues.filter((i) => {
+      const id = i.kind + '|' + i.date + '|' + i.message;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+
+  function renderLegacy() {
+    if (typeof window.renderExamConflictBanner === 'function') window.renderExamConflictBanner();
+  }
+
+  function conflictDatesSet() {
+    if (!enabled()) return new Set();
+    const set = new Set();
+    detectConflicts().forEach((i) => {
+      if (i.date) set.add(String(i.date).slice(0, 10));
+    });
+    return set;
+  }
+
+  function conflictsForDate(iso) {
+    const d = String(iso || '').slice(0, 10);
+    if (!d) return [];
+    return detectConflicts().filter((i) => i.date === d);
+  }
+
+  function decorateCalendar() {
+    if (!enabled()) return;
+    const dates = conflictDatesSet();
+    if (!dates.size) return;
+    document.querySelectorAll('#calGrid .cal-day[data-cal-date]').forEach((cell) => {
+      const ds = cell.getAttribute('data-cal-date');
+      if (ds && dates.has(ds)) {
+        cell.classList.add('cal-day--conflict');
+        cell.setAttribute('title', T('syllabus.cal_marker'));
+      }
+    });
+  }
+
+  function renderDayHint(iso) {
+    if (!enabled() || !iso) return '';
+    const issues = conflictsForDate(iso);
+    if (!issues.length) return '';
+    const items = issues.map((i) => `<li>${esc(i.message)}</li>`).join('');
+    return `<div class="cal-day-conflict-hint" role="status">
+      <strong>${esc(T('syllabus.title'))}</strong>
+      <ul class="syllabus-conflict-list">${items}</ul>
+    </div>`;
+  }
+
+  function render() {
+    const el = document.getElementById('examConflictBanner');
+    if (!el) return;
+
+    if (!enabled()) {
+      el.classList.remove('syllabus-conflict-banner--v2');
+      renderLegacy();
+      return;
+    }
+
+    const issues = detectConflicts();
+    if (!issues.length) {
+      el.style.display = 'none';
+      el.innerHTML = '';
+      el.classList.remove('syllabus-conflict-banner--v2');
+      return;
+    }
+
+    const items = issues
+      .slice(0, 5)
+      .map((i) => `<li>${esc(i.message)}</li>`)
+      .join('');
+    const more =
+      issues.length > 5
+        ? `<li>${esc(T('syllabus.more', { n: issues.length - 5 }))}</li>`
+        : '';
+
+    el.classList.add('syllabus-conflict-banner--v2');
+
+    /* Dismissal is keyed to WHAT the warning says, not to the day you read it.
+       These clashes are usually days or weeks ahead, so a day-scoped rule
+       would bring the banner back every morning until the tests happen. A
+       permanent mute is worse still — the whole point is the pile-up you have
+       not noticed yet. Keying on the messages gives both: acknowledged stays
+       acknowledged, and a new clash speaks up again.
+
+       The key is shared with renderExamConflictBanner in app.js, which draws
+       this same element when the syllabus flag is off, so a dismissal does not
+       come undone by the flag flipping. */
+    const sig = issues.map((i) => i.message).sort().join('|');
+    el.dataset.sig = sig;
+    let dismissed = '';
+    try { dismissed = (window.load ? window.load('flux_exam_conflict_dismissed', '') : '') || ''; } catch (e) {}
+    if (dismissed === sig) { el.style.display = 'none'; el.innerHTML = ''; return; }
+
+    el.style.display = 'block';
+    el.innerHTML = `<div style="display:flex;align-items:flex-start;gap:10px">
+      <div style="flex:1;min-width:0"><strong>${esc(T('syllabus.title'))}</strong>
+      <ul class="syllabus-conflict-list">${items}${more}</ul></div>
+      <button type="button" onclick="fluxDismissExamConflict()" aria-label="Dismiss this warning" title="Dismiss — it returns if the clash changes" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:2px 4px;font-size:.9rem;flex-shrink:0;transform:none;box-shadow:none">✕</button>
+    </div>`;
+  }
+
+  window.FluxSyllabusConflict = {
+    FLAG,
+    enabled,
+    detectConflicts,
+    conflictDatesSet,
+    conflictsForDate,
+    decorateCalendar,
+    renderDayHint,
+    render,
+  };
+})();

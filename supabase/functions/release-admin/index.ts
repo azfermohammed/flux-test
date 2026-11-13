@@ -1,0 +1,879 @@
+import {
+  corsHeaders,
+  hasRecentMfa,
+  json,
+  serviceClient,
+  serviceClientActingFor,
+  verifyUserJWT,
+} from "../_shared/auth.ts";
+import { overDailyLimit } from "../_shared/rate-limit.ts";
+
+const OWNER_EMAIL = (Deno.env.get("FLUX_OWNER_EMAIL") ||
+  "azfermohammed21@gmail.com").toLowerCase();
+
+/**
+ * The owner's Auth user id — the identity that actually cannot change.
+ *
+ * Every gate here used to compare the caller's email against OWNER_EMAIL, but
+ * accounts are moving to name + password, where the stored address is a
+ * synthesised one. The moment the owner's address changes, all of them return
+ * 403 and he loses every Auth Admin action at once — including
+ * auth_set_password, which is the only way to get anyone else back into their
+ * account now that there is no email-based reset.
+ *
+ * The id is the only test. An email fallback stood here until the 2026-11-05
+ * incident, but once the owner moved to a synthesised address nobody held
+ * OWNER_EMAIL as a login, and sign-ups are confirmed automatically, so whoever
+ * registered it would have become the owner.
+ *
+ * Matches OWNER_UID in public/js/app.js. Override with FLUX_OWNER_UID.
+ */
+const OWNER_UID = (Deno.env.get("FLUX_OWNER_UID") ||
+  "eabe2b1f-e428-4181-8530-8e5366eb3975").trim();
+
+function isOwnerCaller(_email: string, userId: string) {
+  return !!OWNER_UID && !!userId && userId === OWNER_UID;
+}
+
+/** Owner powers expire 12 hours after the last authenticator code. */
+const OWNER_MFA_MAX_AGE_S = 12 * 60 * 60;
+/** Actions that hand over or remove an account need a code from the last 15 minutes. */
+const STEP_UP_MAX_AGE_S = 15 * 60;
+const STEP_UP_ACTIONS = new Set([
+  "owner_patch_user_role",
+  "auth_set_password",
+  "auth_send_recovery_link",
+  "auth_delete_user",
+  "auth_ban_user",
+]);
+/** Recorded in flux_admin_action_log as well as the owner's own list. */
+const LOGGED_AUTH_ACTIONS = new Set([
+  "auth_set_password",
+  "auth_send_recovery_link",
+  "auth_delete_user",
+  "auth_ban_user",
+  "auth_create_user",
+  "auth_force_password_rotate",
+  "auth_revoke_sessions",
+]);
+
+type JsonRecord = Record<string, unknown>;
+type OwnerRow = { id: string; data: JsonRecord | null; updated_at?: string };
+type DevAccount = {
+  email?: string;
+  role?: string;
+  perms?: string[];
+  userId?: string;
+};
+
+function normEmail(v: unknown) {
+  return String(v || "").trim().toLowerCase();
+}
+
+function safeText(v: unknown, max = 800) {
+  return String(v || "").trim().slice(0, max);
+}
+
+function asRecord(v: unknown): JsonRecord {
+  return v && typeof v === "object" && !Array.isArray(v) ? v as JsonRecord : {};
+}
+
+function devAccounts(ownerData: JsonRecord): DevAccount[] {
+  const raw = ownerData.devAccounts;
+  return Array.isArray(raw) ? raw.filter(Boolean) as DevAccount[] : [];
+}
+
+function findDev(ownerData: JsonRecord, userId: string) {
+  return devAccounts(ownerData).find((d) => !!userId && d.userId === userId) || null;
+}
+
+function canPushRelease(
+  ownerData: JsonRecord,
+  userId: string,
+  ownerVerified: boolean,
+) {
+  if (ownerVerified) return { ok: true, role: "owner" };
+  const dev = findDev(ownerData, userId);
+  if (!dev) return { ok: false, role: "user" };
+  const role = String(dev.role || "viewer").toLowerCase();
+  const perms = Array.isArray(dev.perms) ? dev.perms : [];
+  const ok = perms.includes("release_push") ||
+    role === "admin" ||
+    role === "editor" ||
+    role === "owner" ||
+    role === "dev";
+  return { ok, role: ok ? "dev" : "viewer" };
+}
+
+/**
+ * The release gate as this caller may see it.
+ *
+ * Every signed-in planner reads the gate to learn whether an update is live,
+ * but previewEmails and the pushedBy / updatedBy fields are staff addresses.
+ * The owner and release devs get the whole gate. Anyone else gets the list cut
+ * down to their own address, which is all the planner compares it against.
+ */
+function gateForCaller(gate: unknown, email: string, full: boolean) {
+  if (!gate || typeof gate !== "object" || Array.isArray(gate)) return null;
+  if (full) return gate;
+  const g = { ...(gate as JsonRecord) };
+  delete g.pushedBy;
+  delete g.stagingUpdatedBy;
+  delete g.previewUpdatedBy;
+  g.previewEmails = normalizePreviewEmails(g.previewEmails).filter((e) => !!email && e === email);
+  return g;
+}
+
+function normalizePreviewMode(v: unknown) {
+  const m = String(v || "all_devs");
+  return m === "owner" || m === "selected" || m === "all_devs"
+    ? m
+    : "all_devs";
+}
+
+function normalizePreviewEmails(v: unknown) {
+  if (!Array.isArray(v)) return [];
+  return Array.from(new Set(v.map(normEmail).filter((x) => x.includes("@"))))
+    .slice(0, 100);
+}
+
+/**
+ * Looked up by id, never by the ownerEmail marker inside the row. Every user
+ * can write their own user_data, so a marker search could be pointed at an
+ * attacker's row, whose devAccounts and platformConfig would then be trusted
+ * and republished to everyone.
+ */
+async function findOwnerRow(db: ReturnType<typeof serviceClient>) {
+  const { data: ownerRow, error } = await db
+    .from("user_data")
+    .select("id,data,updated_at")
+    .eq("id", OWNER_UID)
+    .maybeSingle();
+  if (error) throw error;
+  if (ownerRow) return ownerRow as OwnerRow;
+
+  return { id: OWNER_UID, data: { ownerEmail: OWNER_EMAIL } } as OwnerRow;
+}
+
+/**
+ * The slice of platformConfig that every user is allowed to see.
+ *
+ * This is an allowlist, not a blocklist, on purpose. platform_settings is
+ * world-readable — anon included — so anything not named here cannot leak into
+ * it later by being added to platformConfig. Deliberately absent: devAccounts,
+ * releaseGate.previewEmails, and the pushedBy/updatedBy audit fields, all of
+ * which are staff email addresses.
+ */
+function publicBroadcast(pc: JsonRecord): JsonRecord {
+  const clampInt = (v: unknown, lo: number, hi: number, fallback: number) => {
+    const n = Number.parseInt(String(v ?? ""), 10);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+  };
+  const revision = (v: unknown) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+  };
+  return {
+    announcement: safeText(pc.announcement),
+    announcementRevision: revision(pc.announcementRevision),
+    sessionIdleWarnMins: clampInt(pc.sessionIdleWarnMins, 5, 480, 60),
+    complianceContact: safeText(pc.complianceContact, 200),
+    dataRetentionDays: clampInt(pc.dataRetentionDays, 30, 3650, 365),
+    maintenanceMode: !!pc.maintenanceMode,
+    maintenanceMessage: safeText(pc.maintenanceMessage),
+    signInPopup: safeText(pc.signInPopup, 2000),
+    signInPopupTitle: safeText(pc.signInPopupTitle, 200),
+    signInPopupRevision: revision(pc.signInPopupRevision),
+  };
+}
+
+/**
+ * Mirror the public broadcast into public.platform_settings.
+ *
+ * The owner's planner keeps these values in its own user_data row, but the
+ * read_own policy on that table is `auth.uid() = id`, so a select only ever
+ * returns the caller's own row — no other user can see the owner's. This
+ * table, which anyone may read, is the only channel that reaches them.
+ * Writing to it needs the service role, which is why it happens here.
+ *
+ * updated_by is pinned to the owner rather than the caller: a dev holding
+ * release_push also reaches this path, and their address must not land in a
+ * world-readable column.
+ */
+async function publishBroadcast(
+  db: ReturnType<typeof serviceClient>,
+  platformConfig: JsonRecord,
+) {
+  const { error } = await db.from("platform_settings").upsert({
+    key: "broadcast",
+    value: publicBroadcast(platformConfig),
+    updated_at: new Date().toISOString(),
+    updated_by: OWNER_EMAIL,
+  }, { onConflict: "key" });
+  if (error) throw error;
+}
+
+async function saveOwnerData(
+  db: ReturnType<typeof serviceClient>,
+  ownerRow: OwnerRow,
+  ownerData: JsonRecord,
+) {
+  ownerData.ownerEmail = OWNER_EMAIL;
+  const { error } = await db.from("user_data").upsert({
+    id: ownerRow.id,
+    data: ownerData,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "id" });
+  if (error) throw error;
+  // Republish on every owner-row write, so the public mirror cannot drift away
+  // from the config it mirrors.
+  await publishBroadcast(db, asRecord(ownerData.platformConfig));
+}
+
+function randomTempPassword() {
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) {
+    bin += String.fromCharCode(bytes[i]);
+  }
+  const b64 = btoa(bin).replace(/\+/g, "x").replace(/\//g, "z").replace(
+    /=/g,
+    "",
+  );
+  return (b64 + "Ff9").slice(0, 24);
+}
+
+/** Resolve Auth user id by email (paginated; cap pages for safety). */
+async function findUserIdByEmail(
+  admin: ReturnType<typeof serviceClient>,
+  needle: string,
+): Promise<string | null> {
+  const n = normEmail(needle);
+  if (!n) return null;
+  let page = 1;
+  const perPage = 200;
+  const maxPages = 50;
+  for (; page <= maxPages; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+    const users = data?.users ?? [];
+    const hit = users.find((u) => normEmail(u.email) === n);
+    if (hit?.id) return hit.id;
+    if (users.length < perPage) return null;
+  }
+  return null;
+}
+
+Deno.serve(async (req) => {
+  const origin = req.headers.get("origin") ?? "";
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsHeaders(origin) });
+  }
+  if (req.method !== "GET" && req.method !== "POST") {
+    return json({ error: "Method not allowed" }, 405, origin);
+  }
+
+  const auth = await verifyUserJWT(req);
+  if ("error" in auth) {
+    return json({ error: auth.error }, auth.status, origin);
+  }
+
+  const email = normEmail(auth.email);
+  const callerUserId = auth.userId; // captured here (narrowed) for use inside nested helpers
+  // Every signed-in user reads the release gate here, and the owner's tools
+  // run here. Owner Controls stays well under this; a stolen session trying
+  // to mass-ban or mass-delete runs into it.
+  if (await overDailyLimit("release-admin", callerUserId, 1500)) {
+    return json({ error: "rate_limited" }, 429, origin);
+  }
+  // Same rule as flux_is_platform_admin(): once the owner has an authenticator,
+  // a session without a recent code is treated as an ordinary account.
+  const ownerVerified = isOwnerCaller(email, callerUserId) &&
+    (!auth.hasMfa || hasRecentMfa(auth, OWNER_MFA_MAX_AGE_S));
+  // Role writes made here are credited to the caller in flux_admin_action_log.
+  const db = serviceClientActingFor(req, callerUserId);
+  if (req.method === "POST" && isOwnerCaller(email, callerUserId) && !ownerVerified) {
+    return json({ error: "owner_mfa_required" }, 403, origin);
+  }
+
+  try {
+    const ownerRow = await findOwnerRow(db);
+    const ownerData = asRecord(ownerRow.data);
+    const platformConfig = asRecord(ownerData.platformConfig);
+    const gate = platformConfig.releaseGate || null;
+    const pushAuth = canPushRelease(ownerData, callerUserId, ownerVerified);
+
+    if (req.method === "GET") {
+      return json({
+        ok: true,
+        gate: gateForCaller(gate, email, ownerVerified || pushAuth.ok),
+        role: pushAuth.role,
+        canPush: pushAuth.ok,
+        canManagePreview: ownerVerified,
+      }, 200, origin);
+    }
+
+    let body: JsonRecord;
+    try {
+      body = await req.json();
+    } catch {
+      return json({ error: "Invalid JSON body" }, 400, origin);
+    }
+
+    const action = String(body.action || "");
+
+    if (action === "push_release") {
+      if (!pushAuth.ok) return json({ error: "Not authorized" }, 403, origin);
+      const buildId = safeText(body.buildId, 90);
+      if (!buildId) return json({ error: "buildId required" }, 400, origin);
+
+      const prevGate = asRecord(platformConfig.releaseGate);
+      const nextGate = {
+        ...prevGate,
+        released: buildId,
+        stagingEnabled: false,
+        pushedAt: Date.now(),
+        pushedAtIso: new Date().toISOString(),
+        pushedBy: email,
+        notes: safeText(body.notes),
+      };
+      platformConfig.releaseGate = nextGate;
+      ownerData.platformConfig = platformConfig;
+      await saveOwnerData(db, ownerRow, ownerData);
+
+      return json({
+        ok: true,
+        gate: nextGate,
+        role: pushAuth.role,
+        canPush: true,
+      }, 200, origin);
+    }
+
+    /**
+     * Owner-only write to public.platform_settings — the one place that
+     * changes what *every* planner shows. That table has no write policy on
+     * purpose, so this (service role, behind the isOwnerCaller check) is the
+     * only way in.
+     */
+    if (action === "set_platform_ui") {
+      if (!ownerVerified) {
+        return json({ error: "Only the owner can change platform UI settings" }, 403, origin);
+      }
+
+      // Tab ids end up inside attribute selectors, so hold them to a strict
+      // shape rather than trusting whatever the client sent.
+      const rawTabs = Array.isArray(body.hiddenTabs) ? body.hiddenTabs : [];
+      const hiddenTabs = [
+        ...new Set(
+          rawTabs
+            .map((t: unknown) => String(t || "").trim())
+            .filter((t: string) => /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(t)),
+        ),
+      ];
+
+      // Settings is the way back to this control panel. Hiding it would lock
+      // every user — the owner included — out of undoing the change.
+      const safeTabs = hiddenTabs.filter((t) => t !== "settings");
+
+      const value = { hiddenTabs: safeTabs };
+      const { error } = await db
+        .from("platform_settings")
+        .upsert({
+          key: "ui",
+          value,
+          updated_at: new Date().toISOString(),
+          updated_by: email,
+        }, { onConflict: "key" });
+
+      if (error) {
+        return json({ error: `Could not save platform UI: ${error.message}` }, 500, origin);
+      }
+      return json({ ok: true, value }, 200, origin);
+    }
+
+    /**
+     * Owner-only: update the broadcast half of platformConfig and republish it.
+     *
+     * The owner's planner already writes platformConfig to its own user_data
+     * row through normal sync, but nobody else can read that row, so the values
+     * have to come back through here to reach anyone. Only the broadcast fields
+     * are taken from the request — releaseGate and the rest of platformConfig
+     * are left alone, so a stale client cannot roll back a release.
+     */
+    if (action === "set_platform_broadcast") {
+      if (!ownerVerified) {
+        return json({ error: "Only the owner can change the platform broadcast" }, 403, origin);
+      }
+      const next = {
+        ...platformConfig,
+        ...publicBroadcast(asRecord(body.platformConfig)),
+      };
+      ownerData.platformConfig = next;
+      await saveOwnerData(db, ownerRow, ownerData);
+      return json({ ok: true, broadcast: publicBroadcast(next) }, 200, origin);
+    }
+
+    if (action === "sync_platform_to_devs") {
+      if (!ownerVerified) {
+        return json({ error: "Only the owner can sync platform config to dev accounts" }, 403, origin);
+      }
+      const targetMode = String(body.targetMode || "all") === "selected"
+        ? "selected"
+        : "all";
+      const requested = normalizePreviewEmails(body.targetEmails);
+      const allowedDevEmails = new Set(devAccounts(ownerData).map((d) => normEmail(d.email)));
+
+      const ownerPc = asRecord(ownerData.platformConfig);
+
+      let targets = devAccounts(ownerData);
+      if (targetMode === "selected") {
+        const allow = new Set(
+          requested.filter((e) => allowedDevEmails.has(e)),
+        );
+        targets = targets.filter((d) => allow.has(normEmail(d.email)));
+      }
+      if (!targets.length) {
+        return json({ error: "No dev accounts matched" }, 400, origin);
+      }
+
+      const results: { email: string; ok: boolean; error?: string }[] = [];
+
+      for (const d of targets) {
+        const em = normEmail(d.email);
+        if (!em || em === OWNER_EMAIL) continue;
+
+        let uid =
+          typeof d.userId === "string"
+            ? String(d.userId).trim()
+            : "";
+        if (!uid) {
+          uid = (await findUserIdByEmail(db, em)) ?? "";
+        }
+        if (!uid) {
+          results.push({ email: em, ok: false, error: "No Auth user for email" });
+          continue;
+        }
+        if (uid === ownerRow.id) {
+          results.push({ email: em, ok: false, error: "Target is owner row" });
+          continue;
+        }
+
+        const { data: row, error: rerr } = await db.from("user_data").select("id,data")
+          .eq("id", uid).maybeSingle();
+        if (rerr) {
+          results.push({ email: em, ok: false, error: rerr.message });
+          continue;
+        }
+
+        const existing = asRecord(row?.data);
+        const devPc = asRecord(existing.platformConfig);
+        const nextPc = { ...devPc, ...ownerPc };
+        existing.platformConfig = nextPc;
+
+        const { error: uerr } = await db.from("user_data").upsert({
+          id: uid,
+          data: existing,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "id" });
+        if (uerr) {
+          results.push({ email: em, ok: false, error: uerr.message });
+        } else {
+          results.push({ email: em, ok: true });
+        }
+      }
+
+      return json({
+        ok: true,
+        targetMode,
+        synced: results,
+        okCount: results.filter((r) => r.ok).length,
+      }, 200, origin);
+    }
+
+    if (
+      action === "auth_list_users" ||
+      action === "auth_delete_user" ||
+      action === "auth_ban_user" ||
+      action === "auth_create_user" ||
+      action === "auth_set_password" ||
+      action === "auth_send_recovery_link" ||
+      action === "auth_invite_user" ||
+      action === "auth_force_password_rotate" ||
+      action === "auth_revoke_sessions" ||
+      action === "owner_patch_user_role"
+    ) {
+      if (!ownerVerified) {
+        return json({ error: "Only the owner may call Auth Admin actions" }, 403, origin);
+      }
+
+      // Strict even before the owner adds an authenticator: these hand over or
+      // remove someone else's account.
+      if (STEP_UP_ACTIONS.has(action) && !hasRecentMfa(auth, STEP_UP_MAX_AGE_S)) {
+        return json({ error: "flux_step_up_required" }, 403, origin);
+      }
+
+      const adminAuth = db.auth.admin;
+      if (LOGGED_AUTH_ACTIONS.has(action)) {
+        const target = String(body.userId || "").trim();
+        const { error: logErr } = await db.rpc("flux_log_admin_action", {
+          p_action: action,
+          p_target: /^[0-9a-f-]{36}$/i.test(target) ? target : null,
+          p_old: null,
+          p_new: body.email ? { email: normEmail(body.email) } : null,
+        });
+        // No log, no action: a change nobody can trace is what this guards against.
+        if (logErr) throw logErr;
+      }
+
+      /** Block destructive actions targeting the owner's identity row. */
+      async function guardNotOwnerIdentity(userId: string) {
+        const trimmed = String(userId || "").trim();
+        if (!trimmed) {
+          throw new Error("userId required");
+        }
+        if (trimmed === callerUserId) {
+          throw new Error("Cannot target your own Auth session from this endpoint");
+        }
+        const res = await adminAuth.getUserById(trimmed);
+        if (res.error || !res.data?.user) {
+          throw new Error(res.error?.message || "Auth user not found");
+        }
+        const ue = normEmail(res.data.user.email);
+        if (ue === OWNER_EMAIL || (OWNER_UID && trimmed === OWNER_UID)) {
+          throw new Error("Refusing operator on owner identity");
+        }
+        return res.data.user;
+      }
+
+      if (action === "auth_list_users") {
+        const page = Math.max(1, Math.min(500, Number(body.page ?? 1) || 1));
+        const perPage = Math.max(1, Math.min(200, Number(body.perPage ?? 50) || 50));
+        const { data, error } = await adminAuth.listUsers({ page, perPage });
+        if (error) throw error;
+        const users = data?.users ?? [];
+        const ids = users.map((u) =>
+          String((u as unknown as Record<string, unknown>).id ?? "")
+        ).filter(Boolean);
+
+        const roleById: Record<string, JsonRecord> = {};
+        if (ids.length) {
+          const { data: roleRows, error: rerr } = await db
+            .from("user_roles")
+            .select(
+              "user_id, role, display_name, subject, department, school, grade_level, updated_at",
+            )
+            .in("user_id", ids);
+          if (rerr) throw rerr;
+          for (const row of roleRows || []) {
+            const rec = row as JsonRecord;
+            const uid = String(rec.user_id ?? "");
+            if (uid) roleById[uid] = rec;
+          }
+        }
+
+        const summaries = users.map((u) => {
+          const r = u as unknown as Record<string, unknown>;
+          const id = String(r.id ?? "");
+          const prof = id ? roleById[id] : null;
+          const p = prof ? asRecord(prof) : null;
+          return {
+            id,
+            email: normEmail(r.email),
+            created_at: (r.created_at as string | null) ?? null,
+            last_sign_in_at: (r.last_sign_in_at as string | null) ?? null,
+            banned: !!(r.banned_until && String(r.banned_until) !== ""),
+            fluxRole: p ? String(p.role || "student") : null,
+            display_name: p ? String(p.display_name ?? "") : "",
+            subject: p ? String(p.subject ?? "") : "",
+            department: p ? String(p.department ?? "") : "",
+            school: p ? String(p.school ?? "") : "",
+            grade_level: p ? String(p.grade_level ?? "") : "",
+          };
+        });
+
+        return json({
+          ok: true,
+          users: summaries,
+          nextPage:
+            users.length >= perPage ? page + 1 : null,
+        }, 200, origin);
+      }
+
+      if (action === "owner_patch_user_role") {
+        const userId = String(body.userId || "").trim();
+        if (!userId) return json({ error: "userId required" }, 400, origin);
+
+        const { data: ures, error: gerr } = await adminAuth.getUserById(userId);
+        if (gerr || !ures?.user?.id) {
+          return json({ error: "User not found" }, 404, origin);
+        }
+
+        const { data: existing, error: qerr } = await db
+          .from("user_roles")
+          .select(
+            "user_id, role, display_name, subject, department, school, grade_level",
+          )
+          .eq("user_id", userId)
+          .maybeSingle();
+        if (qerr) throw qerr;
+
+        const ex = asRecord(existing as JsonRecord | null);
+        const allowedRoles = new Set([
+          "student",
+          "teacher",
+          "counselor",
+          "staff",
+          "admin",
+        ]);
+
+        const merged: JsonRecord = {
+          user_id: userId,
+          role: ex.role && allowedRoles.has(String(ex.role))
+            ? String(ex.role)
+            : "student",
+          display_name: ex.display_name ?? null,
+          subject: ex.subject ?? null,
+          department: ex.department ?? null,
+          school: ex.school ?? null,
+          grade_level: ex.grade_level ?? null,
+          updated_at: new Date().toISOString(),
+        };
+
+        if (typeof body.role === "string" && body.role.trim()) {
+          const rr = body.role.trim().toLowerCase();
+          if (!allowedRoles.has(rr)) {
+            return json({ error: "Invalid role" }, 400, origin);
+          }
+          merged.role = rr;
+        }
+
+        const applyText = (
+          key: string,
+          bodyKey: string,
+          altBodyKey?: string,
+        ) => {
+          const raw = body[bodyKey] ?? (altBodyKey ? body[altBodyKey] : undefined);
+          if (raw === undefined) return;
+          if (raw === null) {
+            merged[key] = null;
+            return;
+          }
+          merged[key] = safeText(raw, 600) || null;
+        };
+
+        applyText("display_name", "display_name", "displayName");
+        applyText("subject", "subject");
+        applyText("department", "department");
+        applyText("school", "school");
+        applyText("grade_level", "grade_level", "gradeLevel");
+
+        const { error: uperr } = await db.from("user_roles").upsert(
+          merged,
+          { onConflict: "user_id" },
+        );
+        if (uperr) throw uperr;
+
+        return json({ ok: true, profile: merged }, 200, origin);
+      }
+
+      if (action === "auth_delete_user") {
+        const userId = String(body.userId || "").trim();
+        await guardNotOwnerIdentity(userId);
+        const { error } = await adminAuth.deleteUser(userId);
+        if (error) throw error;
+        return json({ ok: true }, 200, origin);
+      }
+
+      if (action === "auth_ban_user") {
+        const userId = String(body.userId || "").trim();
+        const banned = !!(body.banned ?? body.suspend ?? true);
+        await guardNotOwnerIdentity(userId);
+        const { error } = await adminAuth.updateUserById(userId, {
+          ban_duration: banned ? "876000h" : "none",
+        });
+        if (error) throw error;
+        return json({ ok: true, banned }, 200, origin);
+      }
+
+      if (action === "auth_create_user") {
+        const newEmail = normEmail(body.email);
+        if (!newEmail || !newEmail.includes("@")) {
+          return json({ error: "email required" }, 400, origin);
+        }
+        const pwdRaw = typeof body.password === "string"
+          ? String(body.password)
+          : "";
+        if (pwdRaw.trim().length > 0 && pwdRaw.trim().length < 8) {
+          return json({
+            error:
+              "Password must be empty (generated) or at least 8 characters",
+          }, 400, origin);
+        }
+        let password = pwdRaw.trim();
+        let generatedForResponse: string | undefined;
+        if (password.length < 8) {
+          generatedForResponse = randomTempPassword();
+          password = generatedForResponse;
+        }
+        const email_confirm =
+          !!(body.emailConfirm ?? body.email_confirm ?? true);
+        const { data: created, error } = await adminAuth.createUser({
+          email: newEmail,
+          password,
+          email_confirm,
+          /* Lets the account through while sign-ups are closed or invite-only
+             (flux_enforce_signup_policy). app_metadata, unlike user_metadata,
+             cannot be set by someone signing themselves up. */
+          app_metadata: { flux_owner_created: true },
+        });
+        if (error) throw error;
+        const returnTemp = body.returnTemporaryPassword !== false;
+        const outPw = pwdRaw.length >= 8
+          ? undefined
+          : (returnTemp ? generatedForResponse : undefined);
+        return json({
+          ok: true,
+          userId: created.user?.id,
+          email: newEmail,
+          temporaryPasswordReturned: !!outPw,
+          password: outPw,
+        }, 200, origin);
+      }
+
+      if (action === "auth_set_password") {
+        const userId = String(body.userId || "").trim();
+        const password = safeText(body.password, 200);
+        if (!password || password.length < 8) {
+          return json({ error: "password required (min 8 chars)" }, 400, origin);
+        }
+        await guardNotOwnerIdentity(userId);
+        const { error } = await adminAuth.updateUserById(userId, { password });
+        if (error) throw error;
+        return json({ ok: true }, 200, origin);
+      }
+
+      if (action === "auth_send_recovery_link") {
+        const target = normEmail(body.email);
+        if (!target || !target.includes("@")) {
+          return json({ error: "email required" }, 400, origin);
+        }
+        const redirectTo = typeof body.redirectTo === "string"
+          ? String(body.redirectTo).slice(0, 2048)
+          : undefined;
+        const { data, error } = await adminAuth.generateLink({
+          type: "recovery",
+          email: target,
+          options: redirectTo ? { redirectTo } : {},
+        });
+        if (error) throw error;
+        return json({
+          ok: true,
+          action_link: data?.properties?.action_link ?? null,
+          email_otp: data?.properties?.email_otp ?? null,
+        }, 200, origin);
+      }
+
+      if (action === "auth_invite_user") {
+        const target = normEmail(body.email);
+        if (!target || !target.includes("@")) {
+          return json({ error: "email required" }, 400, origin);
+        }
+        const redirectTo = typeof body.redirectTo === "string"
+          ? String(body.redirectTo).slice(0, 2048)
+          : undefined;
+        const opts = redirectTo ? { redirectTo } : {};
+        const { error } = await adminAuth.inviteUserByEmail(target, opts);
+        if (error) throw error;
+        return json({ ok: true }, 200, origin);
+      }
+
+      if (action === "auth_force_password_rotate") {
+        const userId = String(body.userId || "").trim();
+        await guardNotOwnerIdentity(userId);
+        const nonce = crypto.randomUUID();
+        const { data: ures, error: gerr } = await adminAuth.getUserById(userId);
+        if (gerr) throw gerr;
+        const md = asRecord(ures.user?.user_metadata ?? {});
+        md.flux_password_rotate_required_at = Date.now();
+        md.flux_password_rotate_nonce = nonce;
+        const { error } = await adminAuth.updateUserById(userId, {
+          user_metadata: md,
+        });
+        if (error) throw error;
+        return json({
+          ok: true,
+          note:
+            "User metadata flag set; client apps may read flux_password_rotate_required_at and prompt to change password or use Send recovery.",
+        }, 200, origin);
+      }
+
+      if (action === "auth_revoke_sessions") {
+        const userId = String(body.userId || "").trim();
+        await guardNotOwnerIdentity(userId);
+        const { error } = await adminAuth.signOut(userId, "global");
+        if (error) throw error;
+        return json({ ok: true }, 200, origin);
+      }
+
+      return json({ error: "Unhandled auth_admin branch" }, 500, origin);
+    }
+
+    if (action === "set_staging_enabled") {
+      if (!ownerVerified) {
+        return json({ error: "Only the owner can enable update mode" }, 403, origin);
+      }
+      const prevGate = asRecord(platformConfig.releaseGate);
+      const enabled = Boolean(body.stagingEnabled);
+      const nextGate = {
+        ...prevGate,
+        stagingEnabled: enabled,
+        stagingUpdatedAt: Date.now(),
+        stagingUpdatedBy: email,
+      };
+      platformConfig.releaseGate = nextGate;
+      ownerData.platformConfig = platformConfig;
+      await saveOwnerData(db, ownerRow, ownerData);
+
+      return json({
+        ok: true,
+        gate: nextGate,
+        role: "owner",
+        canPush: true,
+        canManagePreview: true,
+      }, 200, origin);
+    }
+
+    if (action === "save_preview_access") {
+      if (!ownerVerified) {
+        return json({ error: "Only the owner can change preview access" }, 403, origin);
+      }
+      const allowedDevEmails = new Set(devAccounts(ownerData).map((d) => normEmail(d.email)));
+      const requested = normalizePreviewEmails(body.previewEmails);
+      const nextPreviewEmails = requested.filter((x) => allowedDevEmails.has(x));
+      const prevGate = asRecord(platformConfig.releaseGate);
+      const nextGate = {
+        ...prevGate,
+        previewMode: normalizePreviewMode(body.previewMode),
+        previewEmails: nextPreviewEmails,
+        previewUpdatedAt: Date.now(),
+        previewUpdatedBy: email,
+      };
+      platformConfig.releaseGate = nextGate;
+      ownerData.platformConfig = platformConfig;
+      await saveOwnerData(db, ownerRow, ownerData);
+
+      return json({
+        ok: true,
+        gate: nextGate,
+        role: "owner",
+        canPush: true,
+        canManagePreview: true,
+      }, 200, origin);
+    }
+
+    return json({ error: "Unknown action" }, 400, origin);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return json({ error: msg || "Release admin failed" }, 500, origin);
+  }
+});

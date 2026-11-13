@@ -1,0 +1,289 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
+/**
+ * The lab grapher's maths, against hand-worked numbers.
+ *
+ * Every figure expected below was computed by hand from the definitions, not
+ * read back out of this implementation — otherwise the test only proves the
+ * code agrees with itself. The arithmetic is written into each case so the
+ * next person can check the expectation rather than trust it.
+ *
+ * This matters more than most tests here: a gradient goes straight into a lab
+ * report and gets marked, and a wrong one looks exactly like a right one.
+ */
+
+const src = fs.readFileSync('public/js/flux-lab-fit.js', 'utf8');
+const w = {};
+new Function('window', src)(w);
+const F = w.FluxLabFit;
+
+const close = (got, want, tol, what) =>
+  assert.ok(Math.abs(got - want) < tol, `${what}: got ${got}, want ${want} (±${tol})`);
+
+test('a straight line through exact points is recovered exactly', () => {
+  // (1,3) (2,5) (3,7) lie precisely on y = 2x + 1.
+  const r = F.fit('linear', [{ x: 1, y: 3 }, { x: 2, y: 5 }, { x: 3, y: 7 }]).fit;
+  close(r.m, 2, 1e-12, 'gradient');
+  close(r.c, 1, 1e-12, 'intercept');
+  close(r.r2, 1, 1e-12, 'R²');
+  // No scatter, so the standard errors are zero rather than absent.
+  close(r.um, 0, 1e-12, 'u(m)');
+});
+
+test('a line with scatter matches the hand-worked standard errors', () => {
+  /* Points (1,2) (2,3) (3,5) (4,4) (5,6):
+       x̄ = 3, ȳ = 4
+       Sxx = 4+1+0+1+4 = 10
+       Sxy = 4+1+0+0+4 = 9        → m = 0.9,  c = 4 − 0.9·3 = 1.3
+       fitted 2.2 3.1 4.0 4.9 5.8; residuals −0.2 −0.1 1.0 −0.9 0.2
+       Σresid² = 1.90             → s² = 1.90/3 = 0.633333
+       u(m) = √(s²/Sxx)           = √0.0633333 = 0.2516611
+       u(c) = √(s²(1/n + x̄²/Sxx)) = √(0.633333·1.1) = 0.8346662
+       Syy = 10                   → R² = 1 − 1.90/10 = 0.81            */
+  const pts = [{ x: 1, y: 2 }, { x: 2, y: 3 }, { x: 3, y: 5 }, { x: 4, y: 4 }, { x: 5, y: 6 }];
+  const r = F.fit('linear', pts).fit;
+  close(r.m, 0.9, 1e-12, 'gradient');
+  close(r.c, 1.3, 1e-12, 'intercept');
+  close(r.r2, 0.81, 1e-12, 'R²');
+  /* Written as the formula applied to the hand-derived sums above
+     (Σresid² = 1.9, Sxx = 10, n = 5, x̄ = 3) rather than as decimal literals.
+     My first attempt used a rounded s² = 0.63333 and the expectation was wrong
+     in the seventh decimal — which would have meant "fixing" correct code. */
+  const s2 = 1.9 / 3;
+  close(r.um, Math.sqrt(s2 / 10), 1e-12, 'u(m)');
+  close(r.uc, Math.sqrt(s2 * (1 / 5 + 9 / 10)), 1e-12, 'u(c)');
+});
+
+test('two points give a line but no uncertainty, because there is no scatter to measure', () => {
+  const r = F.fit('linear', [{ x: 0, y: 0 }, { x: 2, y: 4 }]).fit;
+  close(r.m, 2, 1e-12, 'gradient');
+  // n − 2 = 0 degrees of freedom. Null is the honest answer; NaN is not.
+  assert.equal(r.um, null, 'u(m) should be absent, not NaN');
+  assert.equal(r.uc, null, 'u(c) should be absent, not NaN');
+});
+
+test('through-the-origin is a different fit, not the line with c dropped', () => {
+  // m = Σxy/Σx² = 28/14 = 2 exactly for (1,2) (2,4) (3,6).
+  const exact = F.fit('proportional', [{ x: 1, y: 2 }, { x: 2, y: 4 }, { x: 3, y: 6 }]).fit;
+  close(exact.m, 2, 1e-12, 'gradient');
+  assert.equal(exact.c, 0, 'a proportional fit must pass through zero');
+
+  /* They genuinely disagree when the data does not head for the origin.
+     (1,3) (2,4) (3,6): Σxy = 29, Σx² = 14 → m = 2.0714, while the free line
+     gives 1.5. Forcing it through zero is a real constraint, not cosmetic. */
+  const off = [{ x: 1, y: 3 }, { x: 2, y: 4 }, { x: 3, y: 6 }];
+  close(F.fit('proportional', off).fit.m, 29 / 14, 1e-12, 'proportional gradient');
+  close(F.fit('linear', off).fit.m, 1.5, 1e-12, 'free-line gradient');
+});
+
+test('a quadratic through three points recovers the curve exactly', () => {
+  // (0,1) (1,2) (2,5) lie on y = x² + 1.
+  const r = F.fit('quadratic', [{ x: 0, y: 1 }, { x: 1, y: 2 }, { x: 2, y: 5 }]).fit;
+  close(r.a, 1, 1e-9, 'a');
+  close(r.b, 0, 1e-9, 'b');
+  close(r.c, 1, 1e-9, 'c');
+  close(r.r2, 1, 1e-9, 'R²');
+});
+
+test('power and exponential recover their own parameters', () => {
+  // y = 2x³ sampled at x = 1,2,3.
+  const p = F.fit('power', [{ x: 1, y: 2 }, { x: 2, y: 16 }, { x: 3, y: 54 }]).fit;
+  close(p.a, 2, 1e-9, 'power a');
+  close(p.b, 3, 1e-9, 'power b');
+
+  // y = 3e^(2x) sampled at x = 0,1,2.
+  const e = F.fit('exponential', [
+    { x: 0, y: 3 },
+    { x: 1, y: 3 * Math.pow(Math.E, 2) },
+    { x: 2, y: 3 * Math.pow(Math.E, 4) },
+  ]).fit;
+  close(e.a, 3, 1e-9, 'exp a');
+  close(e.b, 2, 1e-9, 'exp b');
+});
+
+test('R² is reported against the real readings, not the straightened ones', () => {
+  /* Scattered data that is roughly a power law. The fit happens on logs, where
+     agreement always looks better; reporting that figure would overstate how
+     well the curve describes what was actually measured. */
+  const pts = [{ x: 1, y: 2.2 }, { x: 2, y: 15 }, { x: 3, y: 56 }, { x: 4, y: 120 }];
+  const r = F.fit('power', pts).fit;
+  const predicted = pts.map((p) => r.predict(p.x));
+  close(r.r2, F.rSquared(pts.map((p) => p.y), predicted), 1e-12, 'R² on raw y');
+  assert.ok(typeof r.r2Transformed === 'number', 'the log-space R² is still reported separately');
+});
+
+test('a log fit refuses impossible data instead of dropping the awkward rows', () => {
+  const withZero = [{ x: 0, y: 1 }, { x: 1, y: 2 }, { x: 2, y: 4 }];
+  const r = F.fit('power', withZero);
+  assert.ok(r.error, 'a power fit with x = 0 must refuse');
+  assert.match(r.error, /above zero/i);
+  assert.match(r.error, /row 1/, 'the message should name the offending row');
+
+  const negY = [{ x: 1, y: -2 }, { x: 2, y: 4 }, { x: 3, y: 9 }];
+  assert.ok(F.fit('exponential', negY).error, 'an exponential fit with y < 0 must refuse');
+});
+
+test('too little data, or a vertical line, is explained rather than guessed at', () => {
+  assert.match(F.fit('linear', [{ x: 1, y: 1 }]).error, /two points/i);
+  // Every x the same: infinitely many lines fit, so there is no gradient.
+  assert.ok(F.fit('linear', [{ x: 2, y: 1 }, { x: 2, y: 5 }, { x: 2, y: 9 }]).error);
+  // Rows not filled in yet are ignored, not read as zero.
+  const r = F.fit('linear', [
+    { x: 1, y: 3 }, { x: NaN, y: NaN }, { x: 2, y: 5 }, { x: 3, y: 7 },
+  ]).fit;
+  close(r.m, 2, 1e-12, 'blank rows must not drag the gradient');
+});
+
+test('max and min gradient come from the corners of the end error bars', () => {
+  /* (1,2) ±(0.1,0.2) and (5,10) ±(0.1,0.2):
+       steepest   run = (5−0.1) − (1+0.1) = 3.8
+                  rise = (10+0.2) − (2−0.2) = 8.4   → 2.210526
+       shallowest run = (5+0.1) − (1−0.1) = 4.2
+                  rise = (10−0.2) − (2+0.2) = 7.6   → 1.809524
+       uncertainty = half the difference            → 0.200501          */
+  const g = F.minMaxGradient([
+    { x: 1, y: 2, dx: 0.1, dy: 0.2 },
+    { x: 3, y: 6, dx: 0.1, dy: 0.2 },
+    { x: 5, y: 10, dx: 0.1, dy: 0.2 },
+  ]);
+  close(g.mMax, 8.4 / 3.8, 1e-12, 'steepest gradient');
+  close(g.mMin, 7.6 / 4.2, 1e-12, 'shallowest gradient');
+  close(g.uncertainty, Math.abs(8.4 / 3.8 - 7.6 / 4.2) / 2, 1e-12, 'gradient uncertainty');
+  // It uses the extremes by x, so the order rows were typed in cannot matter.
+  const shuffled = F.minMaxGradient([
+    { x: 5, y: 10, dx: 0.1, dy: 0.2 },
+    { x: 1, y: 2, dx: 0.1, dy: 0.2 },
+    { x: 3, y: 6, dx: 0.1, dy: 0.2 },
+  ]);
+  close(shuffled.mMax, g.mMax, 1e-12, 'order must not change the answer');
+});
+
+test('error bars wide enough to overlap give no gradient rather than an infinity', () => {
+  // The end bars cross in x, so "steepest" and "shallowest" stop meaning anything.
+  const g = F.minMaxGradient([
+    { x: 1, y: 2, dx: 5, dy: 0.1 },
+    { x: 2, y: 4, dx: 5, dy: 0.1 },
+  ]);
+  assert.equal(g, null, 'overlapping x bars should return nothing, not Infinity');
+});
+
+test('column uncertainty rules resolve to absolute values', () => {
+  close(F.resolveUncertainty(50, { mode: 'absolute', value: 0.5 }), 0.5, 1e-12, 'absolute');
+  close(F.resolveUncertainty(50, { mode: 'percent', value: 2 }), 1, 1e-12, '2% of 50');
+  assert.equal(F.resolveUncertainty(50, { mode: 'none' }), 0, 'none means zero');
+  assert.equal(F.resolveUncertainty(50, null), 0, 'a missing rule means zero');
+  // A percentage of a negative reading is still a positive bar length.
+  close(F.resolveUncertainty(-50, { mode: 'percent', value: 2 }), 1, 1e-12, 'negative reading');
+});
+
+test('cubic, inverse and inverse-square recover the curves they were sampled from', () => {
+  const at = (f, xs) => xs.map((x) => ({ x, y: f(x) }));
+  const c = F.fit('cubic', at((x) => x ** 3 - 2 * x + 1, [-2, -1, 0, 1, 2, 3])).fit;
+  close(c.a, 1, 1e-9, 'cubic a'); close(c.b, 0, 1e-9, 'cubic b');
+  close(c.c, -2, 1e-9, 'cubic c'); close(c.d, 1, 1e-9, 'cubic d');
+
+  // Boyle's law shape: y = 6/x + 2.
+  const inv = F.fit('inverse', at((x) => 6 / x + 2, [1, 2, 3, 4, 6])).fit;
+  close(inv.a, 6, 1e-9, 'inverse a'); close(inv.b, 2, 1e-9, 'inverse b');
+  const sq = F.fit('inverseSquare', at((x) => 8 / (x * x) - 1, [1, 2, 4, 5])).fit;
+  close(sq.a, 8, 1e-9, 'inverse-square a'); close(sq.b, -1, 1e-9, 'inverse-square b');
+  assert.match(F.fit('inverse', [{ x: 0, y: 1 }, { x: 1, y: 2 }, { x: 2, y: 3 }]).error, /row 1/, 'x = 0 is refused, by row');
+});
+
+test('the general fit gives the same standard errors as the textbook straight line', () => {
+  /* Same scattered points as the hand-worked test above. A straight line is
+     also a basis fit on {x, 1}; if the covariance route disagreed with the
+     textbook u(m) and u(c) formulas, every curved fit's uncertainty would be
+     wrong in the same way. */
+  const pts = [{ x: 1, y: 2 }, { x: 2, y: 3 }, { x: 3, y: 5 }, { x: 4, y: 4 }, { x: 5, y: 6 }];
+  const lin = F.fit('linear', pts).fit;
+  const quad = F.fit('quadratic', pts).fit;
+  assert.equal(quad.params.length, 3);
+  assert.ok(quad.params.every((p) => p.u > 0), 'a quadratic through scattered data has uncertainties');
+  const g = F.nonlinear('line', ['m', 'c'], (q, x) => q[0] * x + q[1], [1, 0], pts.map((p) => p.x), pts.map((p) => p.y));
+  close(g.params[0].value, lin.m, 1e-7, 'm by iteration');
+  close(g.params[0].u, lin.um, 1e-6, 'u(m) by covariance');
+  close(g.params[1].u, lin.uc, 1e-6, 'u(c) by covariance');
+});
+
+test('a sine wave is found, frequency and all, from readings alone', () => {
+  // y = 2 sin(3x + 0.5) + 1, sampled unevenly.
+  const xs = [0, 0.13, 0.31, 0.42, 0.6, 0.77, 0.9, 1.1, 1.26, 1.4, 1.63, 1.8, 2.02, 2.2];
+  const pts = xs.map((x) => ({ x, y: 2 * Math.sin(3 * x + 0.5) + 1 }));
+  const s = F.fit('sine', pts).fit;
+  const [A, B, C, D] = s.values;
+  close(A, 2, 1e-6, 'amplitude'); close(B, 3, 1e-6, 'frequency');
+  close(C, 0.5, 1e-6, 'phase'); close(D, 1, 1e-6, 'offset');
+  close(s.r2, 1, 1e-9, 'R²');
+});
+
+test('a hand-typed model is fitted by iteration: a cooling curve with an offset', () => {
+  // T = 60 e^(−0.3t) + 20 — Newton's law of cooling, room at 20°.
+  const ts = [0, 1, 2, 3, 5, 7, 10, 14];
+  const ys = ts.map((t) => 60 * Math.exp(-0.3 * t) + 20);
+  const r = F.nonlinear('custom', ['A', 'k', 'R'], (q, t) => q[0] * Math.exp(-q[1] * t) + q[2], [1, 1, 1], ts, ys);
+  close(r.values[0], 60, 1e-5, 'A'); close(r.values[1], 0.3, 1e-7, 'k'); close(r.values[2], 20, 1e-5, 'room temperature');
+  assert.match(F.nonlinear('x', ['a', 'b', 'c'], (q, x) => q[0], [1, 1, 1], [1, 2], [1, 2]).error, /at least 3/);
+});
+
+test('the automatic best fit prefers the simpler model when both fit', () => {
+  /* Straight-line data with a little scatter. A cubic has lower SSE — it
+     always does — but AICc charges it for its extra numbers, so the line
+     should win. On clearly curved data the quadratic should. */
+  const line = [0, 1, 2, 3, 4, 5, 6, 7].map((x, i) => ({ x, y: 2 * x + 1 + [0.1, -0.12, 0.05, 0.08, -0.1, 0.02, -0.06, 0.09][i] }));
+  const a = F.best(line);
+  assert.ok(['linear', 'proportional'].includes(a.kind), 'straight-line data chose ' + a.kind);
+  assert.equal(a.kind, 'linear', 'the intercept of 1 is real, so a line through the origin should lose');
+
+  const curve = [0, 1, 2, 3, 4, 5, 6].map((x, i) => ({ x, y: 0.5 * x * x - x + 3 + [0.05, -0.04, 0.03, -0.05, 0.02, 0.04, -0.03][i] }));
+  assert.equal(F.best(curve).kind, 'quadratic');
+
+  const decay = [0, 1, 2, 3, 4, 5, 6].map((x) => ({ x, y: 50 * Math.exp(-0.4 * x) }));
+  assert.equal(F.best(decay).kind, 'exponential', 'exact exponential data');
+  assert.ok(F.best([{ x: 1, y: 1 }, { x: 2, y: 2 }]).error, 'two points cannot be compared');
+});
+
+/* ── Weighted by the error bars ────────────────────────────────────────
+   Hand-worked with the weighted normal equations: w = 1/σ² = 100, 100, 100,
+   0.25; S = 300.25, Σwx = 300.75, Σwy = 301.25, Σwx² = 502.25,
+   Σwxy = 503.75, Δ = 60350. */
+test('weighting by the error bars: a reading with a huge bar barely moves the line', () => {
+  const pts = [
+    { x: 0, y: 0, dy: 0.1 }, { x: 1, y: 1, dy: 0.1 }, { x: 2, y: 2, dy: 0.1 }, { x: 3, y: 5, dy: 2 },
+  ];
+  const plain = F.fit('linear', pts).fit;
+  assert.ok(Math.abs(plain.m - 1.6) < 1e-12, 'unweighted, the stray point drags m to 1.6');
+  const w = F.fit('linear', pts, { weighted: true }).fit;
+  assert.equal(w.weighted, true);
+  assert.ok(Math.abs(w.m - 60650 / 60350) < 1e-9, `m = ${w.m}`);
+  assert.ok(Math.abs(w.c - (-200 / 60350)) < 1e-9, `c = ${w.c}`);
+  assert.ok(Math.abs(w.um - Math.sqrt(300.25 / 60350)) < 1e-9, 'u(m) comes from the bars: √(S/Δ)');
+  assert.ok(Math.abs(w.uc - Math.sqrt(502.25 / 60350)) < 1e-9, 'u(c) = √(Σwx²/Δ)');
+  assert.equal(w.dof, 2);
+  assert.ok(Math.abs(w.chi2 - 0.9941) < 1e-3, `χ² = ${w.chi2}`);
+});
+
+test('weighted through the origin: m = Σwxy / Σwx², u(m) = 1/√Σwx²', () => {
+  const w = F.fit('proportional', [{ x: 1, y: 1, dy: 0.1 }, { x: 2, y: 2.2, dy: 0.2 }], { weighted: true }).fit;
+  assert.ok(Math.abs(w.m - 1.05) < 1e-12);
+  assert.ok(Math.abs(w.um - 1 / Math.sqrt(200)) < 1e-12);
+});
+
+test('x error bars count too, seen through the slope', () => {
+  // Same readings; the last one's uncertainty is in x instead of y. On a line
+  // of slope ~1 an x bar of 2 weighs about the same as a y bar of 2.
+  const yBars = F.fit('linear', [{ x: 0, y: 0, dy: 0.1 }, { x: 1, y: 1, dy: 0.1 }, { x: 2, y: 2, dy: 0.1 }, { x: 3, y: 5, dy: 2 }], { weighted: true }).fit;
+  const xBars = F.fit('linear', [{ x: 0, y: 0, dy: 0.1 }, { x: 1, y: 1, dy: 0.1 }, { x: 2, y: 2, dy: 0.1 }, { x: 3, y: 5, dx: 2 }], { weighted: true }).fit;
+  assert.ok(Math.abs(xBars.m - yBars.m) < 0.01, `${xBars.m} vs ${yBars.m}`);
+});
+
+test('a weighted fit refuses readings with no error bar, and leaves curved fits alone', () => {
+  const r = F.fit('linear', [{ x: 0, y: 0, dy: 0.1 }, { x: 1, y: 1 }, { x: 2, y: 2, dy: 0.1 }], { weighted: true });
+  assert.match(r.error, /error bar on every reading/);
+  const pw = F.fit('power', [{ x: 1, y: 2, dy: 0.1 }, { x: 2, y: 8, dy: 0.1 }, { x: 3, y: 18, dy: 0.1 }], { weighted: true });
+  assert.ok(pw.fit && !pw.fit.weighted, 'power fits are not weighted');
+  const quad = F.fit('quadratic', [{ x: 0, y: 1, dy: 0.1 }, { x: 1, y: 2, dy: 0.1 }, { x: 2, y: 5, dy: 0.1 }, { x: 3, y: 10, dy: 0.1 }], { weighted: true }).fit;
+  assert.ok(Math.abs(quad.values[0] - 1) < 1e-9 && Math.abs(quad.values[2] - 1) < 1e-9, 'y = x² + 1 recovered exactly');
+});

@@ -1,0 +1,443 @@
+import { test, expect } from '@playwright/test';
+import { gotoScenario } from './helpers';
+
+/*
+ * The classes a member of staff TEACHES, on the IA A/B period system.
+ *
+ * Two invariants carry most of the risk here.
+ *
+ * 1. It must stay OFF the student key. flux_classes drives GPA, subject
+ *    budgets, the task subject picker and the AI planner's context. A teacher's
+ *    list is the same shape with the opposite meaning, so if the two ever share
+ *    storage, anyone who is both a student and a teacher gets "American Lit,
+ *    period A1" silently folded into their grade average. That is the kind of
+ *    bug nobody reports because the number just looks slightly wrong.
+ *
+ * 2. Period parsing is BORROWED, not reimplemented. parseClassPeriodInput is
+ *    what the student form, the PDF schedule import and onboarding all use. A
+ *    second parser would drift the first time the school changed its format,
+ *    so the test pins the shared behaviour rather than a local copy of it.
+ */
+
+async function gotoTeacherSchool(page: import('@playwright/test').Page) {
+  await gotoScenario(page, 'teacher-workflow');
+  // The harness settles the role asynchronously; School Info only renders the
+  // teacher variant once FluxRole reports Work mode.
+  await expect
+    .poll(() => page.evaluate(() => (window as any).FluxRole?.isWorkMode?.() === true), {
+      timeout: 15_000,
+    })
+    .toBe(true);
+  await page.evaluate(() => (window as any).save('flux_teacher_classes', []));
+  await page.evaluate(() => (window as any).nav('school'));
+  await expect(page.locator('#fluxTeacherClasses')).toBeVisible({ timeout: 15_000 });
+}
+
+/** Fill the add row and submit it, the way a teacher would. */
+async function addClass(
+  page: import('@playwright/test').Page,
+  fields: { period: string; name: string; room?: string; start?: string; end?: string },
+) {
+  await page.fill('#ftcPeriod', fields.period);
+  await page.fill('#ftcName', fields.name);
+  if (fields.room) await page.fill('#ftcRoom', fields.room);
+  if (fields.start) await page.fill('#ftcStart', fields.start);
+  if (fields.end) await page.fill('#ftcEnd', fields.end);
+  await page.click('#fluxTeacherClasses [data-ftc="class-add"]');
+}
+
+test.describe('Teacher class schedule', () => {
+  test('adds classes on the A/B period system and reads them back in order', async ({ page }) => {
+    await gotoTeacherSchool(page);
+
+    // Deliberately out of order: the list should sort itself.
+    await addClass(page, { period: 'B3', name: 'World History', room: '118' });
+    await addClass(page, { period: 'A1', name: 'American Lit', room: '204', start: '08:15', end: '09:05' });
+
+    const stored = await page.evaluate(() => (window as any).FluxTeacherClasses.list());
+    expect(stored.map((c: any) => c.periodLabel)).toEqual(['A1', 'B3']);
+    // "A1" must become period 1 on A Day — the shared parser's contract.
+    expect(stored[0]).toMatchObject({ period: 1, days: 'A Day', name: 'American Lit', room: '204' });
+    expect(stored[1]).toMatchObject({ period: 3, days: 'B Day', name: 'World History' });
+
+    // The badge is what a teacher actually reads down the left of the card.
+    const badges = await page.locator('#fluxTeacherClasses .ftc-badge').allTextContents();
+    expect(badges).toEqual(['A1', 'B3']);
+    await expect(page.locator('#fluxTeacherClasses .ftc-class-name').first()).toHaveText('American Lit');
+    // Room and time are collapsed into one meta line rather than three chips.
+    await expect(page.locator('#fluxTeacherClasses .ftc-class-meta').first()).toHaveText(
+      'Room 204 · 08:15–09:05',
+    );
+  });
+
+  test('never writes to the student class list', async ({ page }) => {
+    await gotoTeacherSchool(page);
+    const before = await page.evaluate(() => (window as any).load('flux_classes', []));
+
+    await addClass(page, { period: 'A2', name: 'American Lit' });
+
+    const after = await page.evaluate(() => ({
+      students: (window as any).load('flux_classes', []),
+      teachers: (window as any).load('flux_teacher_classes', []),
+    }));
+    // The whole reason for a separate key: a teacher's timetable must never
+    // reach the list that feeds GPA.
+    expect(after.students).toEqual(before);
+    expect(after.teachers).toHaveLength(1);
+    expect(after.teachers[0].name).toBe('American Lit');
+  });
+
+  test('a class carries its own assigned work and events', async ({ page }) => {
+    await gotoTeacherSchool(page);
+    await addClass(page, { period: 'A1', name: 'American Lit' });
+
+    const id = await page.evaluate(() => (window as any).FluxTeacherClasses.list()[0].id);
+    await page.click(`#fluxTeacherClasses [data-ftc="toggle"][data-id="${id}"]`);
+
+    await page.fill(`#ftcWorkTitle-${id}`, 'Essay 2 draft');
+    await page.fill(`#ftcWorkDue-${id}`, '2026-09-05');
+    await page.click(`#fluxTeacherClasses [data-ftc="work-add"][data-id="${id}"]`);
+
+    await page.selectOption(`#ftcWorkType-${id}`, 'event');
+    await page.fill(`#ftcWorkTitle-${id}`, 'Museum field trip');
+    await page.fill(`#ftcWorkDue-${id}`, '2026-09-12');
+    await page.click(`#fluxTeacherClasses [data-ftc="work-add"][data-id="${id}"]`);
+
+    const work = await page.evaluate(() => (window as any).FluxTeacherClasses.list()[0].work);
+    expect(work).toHaveLength(2);
+    // Assignments and events are distinguishable — an assembly is not a thing
+    // to grade, and the card colours them differently on that basis.
+    expect(work.map((w: any) => w.type)).toEqual(['assignment', 'event']);
+    expect(work.map((w: any) => w.title)).toEqual(['Essay 2 draft', 'Museum field trip']);
+    // Soonest first.
+    expect(work.map((w: any) => w.due)).toEqual(['2026-09-05', '2026-09-12']);
+
+    // Ticking one through the UI persists, and does not disturb the other.
+    await page.click(`#fluxTeacherClasses .ftc-check[data-wid="${work[0].id}"]`);
+    const after = await page.evaluate(() => (window as any).load('flux_teacher_classes', [])[0].work);
+    expect(after[0].done).toBe(true);
+    expect(after[1].done).toBe(false);
+  });
+
+  test('undated work sinks below dated work instead of sorting as year zero', async ({ page }) => {
+    await gotoTeacherSchool(page);
+    await addClass(page, { period: 'A1', name: 'American Lit' });
+    const id = await page.evaluate(() => (window as any).FluxTeacherClasses.list()[0].id);
+    await page.click(`#fluxTeacherClasses [data-ftc="toggle"][data-id="${id}"]`);
+
+    // Added first, with no date. A naive comparator puts '' before any real
+    // date, which would bury the thing that is actually due tomorrow.
+    await page.fill(`#ftcWorkTitle-${id}`, 'Reading, no deadline');
+    await page.click(`#fluxTeacherClasses [data-ftc="work-add"][data-id="${id}"]`);
+    await page.fill(`#ftcWorkTitle-${id}`, 'Essay 2 draft');
+    await page.fill(`#ftcWorkDue-${id}`, '2026-09-05');
+    await page.click(`#fluxTeacherClasses [data-ftc="work-add"][data-id="${id}"]`);
+
+    const titles = await page.evaluate(() =>
+      (window as any).FluxTeacherClasses.list()[0].work.map((w: any) => w.title),
+    );
+    expect(titles).toEqual(['Essay 2 draft', 'Reading, no deadline']);
+  });
+
+  test('deleting a class says how much work goes with it', async ({ page }) => {
+    await gotoTeacherSchool(page);
+    await page.evaluate(() =>
+      (window as any).FluxTeacherClasses._set([
+        {
+          id: 1,
+          period: 1,
+          periodLabel: 'A1',
+          days: 'A Day',
+          name: 'American Lit',
+          color: '#3b82f6',
+          work: [
+            { id: 'w1', type: 'assignment', title: 'Essay 2', due: '2026-09-05', done: false },
+            { id: 'w2', type: 'event', title: 'Field trip', due: '', done: false },
+          ],
+        },
+      ]),
+    );
+
+    // Losing two pieces of work to a single × is worth a sentence, not a
+    // surprise — so the count is named in the prompt.
+    const messages: string[] = [];
+    page.on('dialog', (d) => {
+      messages.push(d.message());
+      d.dismiss();
+    });
+    await page.click('#fluxTeacherClasses [data-ftc="class-del"][data-id="1"]');
+    expect(messages[0]).toBe('Delete American Lit and its 2 items of work?');
+    // Dismissing must keep it.
+    expect(await page.evaluate(() => (window as any).FluxTeacherClasses.list())).toHaveLength(1);
+  });
+
+  test('survives a reload and applies a cloud payload', async ({ page }) => {
+    await gotoTeacherSchool(page);
+    await addClass(page, { period: 'A1', name: 'American Lit', room: '204' });
+
+    await page.reload();
+    await expect(page.locator('#app')).toHaveClass(/visible/);
+    await page.evaluate(() => (window as any).nav('school'));
+    await expect(page.locator('#fluxTeacherClasses .ftc-class-name')).toHaveText('American Lit');
+
+    // A second device pushing its own list must replace, render and persist.
+    await page.evaluate(() =>
+      (window as any).FluxTeacherClasses.applyFromCloud([
+        { id: 9, period: 4, periodLabel: 'B4', days: 'B Day', name: 'Physics', color: '#10d9a0', work: [] },
+      ]),
+    );
+    await expect(page.locator('#fluxTeacherClasses .ftc-class-name')).toHaveText('Physics');
+    expect(await page.evaluate(() => (window as any).load('flux_teacher_classes', []))).toHaveLength(1);
+    // And the slice it would send back is the same list.
+    expect(
+      await page.evaluate(() => (window as any).FluxTeacherClasses.getCloudSlice()[0].name),
+    ).toBe('Physics');
+  });
+
+  test('a class with no name is refused', async ({ page }) => {
+    await gotoTeacherSchool(page);
+    await addClass(page, { period: 'A1', name: '   ' });
+    expect(await page.evaluate(() => (window as any).FluxTeacherClasses.list())).toHaveLength(0);
+    await expect(page.locator('#fluxTeacherClasses .ftc-empty')).toBeVisible();
+  });
+});
+
+/*
+ * The staff surfaces that were reading the wrong list.
+ *
+ * Before a teacher timetable existed, the Lesson Hub and the FluxNow strip
+ * both read window.classes — the classes you ATTEND. For a teacher that is
+ * normally empty, so the Lesson Hub rendered "No classes yet" directly beneath
+ * its own empty state telling you to add the periods you teach in School Info,
+ * and the dashboard counted 0 of everything. These pin the fix: staff read the
+ * timetable they teach, students are unaffected, and Personal mode still means
+ * "me, the person".
+ */
+test.describe('Staff surfaces read the timetable they teach', () => {
+  /*
+   * Monday 2026-03-09, midday — a fixed instant, not "now". The tests below
+   * resolve against this same one.
+   *
+   * These two classes used to be seeded at `now ± minutes` while storing only
+   * HH:MM. That held until the suite ran late: the job that went red on main
+   * ran at 23:30, which made World History 23:20–00:00 and American Lit
+   * 00:10–01:00 — *earlier in the day* than "now" — so there was no next
+   * period and `next` came back null. The helper already pinned the weekday
+   * and reasoned the hour was safe; the hour was the half that broke.
+   *
+   * Midday, because it leaves room on both sides for a class that has already
+   * started and one that has not.
+   */
+  const SCHOOL_DAY = new Date('2026-03-09T12:00:00');
+
+  /** Two classes around SCHOOL_DAY, one in session and one later. */
+  async function seedTeachingDay(page: import('@playwright/test').Page) {
+    return page.evaluate((baseIso: string) => {
+      const p = (n: number) => (n < 10 ? '0' : '') + n;
+      const base = new Date(baseIso);
+      const hm = (d: Date) => p(d.getHours()) + ':' + p(d.getMinutes());
+      (window as any).FluxTeacherClasses._set([
+        {
+          id: 101, period: 2, periodLabel: 'A2', days: '', name: 'World History', room: '118',
+          timeStart: hm(new Date(base.getTime() - 10 * 60000)),
+          timeEnd: hm(new Date(base.getTime() + 30 * 60000)),
+          color: '#f43f5e', work: [],
+        },
+        {
+          id: 102, period: 3, periodLabel: 'A3', days: '', name: 'American Lit', room: '204',
+          timeStart: hm(new Date(base.getTime() + 40 * 60000)),
+          timeEnd: hm(new Date(base.getTime() + 90 * 60000)),
+          color: '#3b82f6', work: [],
+        },
+      ]);
+    }, SCHOOL_DAY.toISOString());
+  }
+
+  test('FluxNow names the class a teacher is teaching, not one they attend', async ({ page }) => {
+    await gotoTeacherSchool(page);
+    await seedTeachingDay(page);
+
+    const res = await page.evaluate((baseIso: string) => {
+      const w = window as any;
+      // resolveLive weekend-gates, so this has to be a weekday — SCHOOL_DAY is
+      // a Monday. Resolving against the same instant the classes were seeded
+      // around is what makes "in period 2, next is period 3" true regardless
+      // of when the suite runs.
+      return {
+        r: w.FluxNow.resolveLive(new Date(baseIso)),
+        studentNames: (w.classes || []).map((c: any) => c.name),
+      };
+    }, SCHOOL_DAY.toISOString());
+
+    expect(res.r.state).toBe('period');
+    expect(res.r.cls.name).toBe('World History');
+    expect(res.r.next.name).toBe('American Lit');
+    expect(res.r.sentence).toContain('World History');
+    // The student list is non-empty in this scenario, so naming a class from
+    // the teaching list is only meaningful if it is not also a student one.
+    expect(res.studentNames.length).toBeGreaterThan(0);
+    expect(res.studentNames).not.toContain('World History');
+  });
+
+  test('the Lesson Hub lists what you teach, with attendance to take', async ({ page }) => {
+    await gotoTeacherSchool(page);
+    await seedTeachingDay(page);
+    await page.evaluate(() => (window as any).nav('lessonHub'));
+
+    const cards = page.locator('#lessonHubBody .lh-class-card');
+    await expect(cards).toHaveCount(2);
+    await expect(cards.first().locator('.lh-class-name')).toHaveText('World History');
+    // The empty state that used to show under a filled-in timetable.
+    await expect(page.locator('#lessonHubBody .lh-empty')).toHaveCount(0);
+    // Attendance is the thing a teacher comes here to do.
+    await expect(cards.first().locator('.lh-att-mini')).toHaveText('No attendance');
+    await cards.first().locator('.lh-att-btn[data-att="present"]').click();
+    await expect(page.locator('#lessonHubBody .lh-class-card').first().locator('.lh-att-mini'))
+      .toHaveText('All present');
+  });
+
+  test('only the classes that meet today are listed', async ({ page }) => {
+    await gotoTeacherSchool(page);
+    // Same period number on opposite cycle days. Rendering both on one day is
+    // what made them share a lesson-state key and overwrite each other.
+    await page.evaluate(() => {
+      (window as any).save('flux_cycle_config', {
+        enabled: true, pattern: ['A', 'B'], anchorDate: '2026-08-31', skipWeekends: true,
+      });
+      (window as any).FluxTeacherClasses._set([
+        { id: 1, period: 1, periodLabel: 'A1', days: 'A Day', name: 'American Lit', color: '#3b82f6', work: [] },
+        { id: 2, period: 1, periodLabel: 'B1', days: 'B Day', name: 'World History', color: '#f43f5e', work: [] },
+      ]);
+    });
+
+    const res = await page.evaluate(() => {
+      const w = window as any;
+      const label = w.FluxNow.cycleToday();
+      const today = w.FluxNow.classesForDay(w.FluxTeacherClasses.mine(), label);
+      return { label, names: today.map((c: any) => c.name) };
+    });
+
+    // Whatever today's letter is, exactly one of the two period-1 classes runs.
+    if (res.label) {
+      expect(res.names).toHaveLength(1);
+      expect(res.names[0]).toBe(res.label === 'A' ? 'American Lit' : 'World History');
+    } else {
+      // Weekend or no cycle: A/B classes are not scheduled at all.
+      expect(res.names).toHaveLength(0);
+    }
+  });
+
+  test('Personal mode gives an educator their own student list back', async ({ page }) => {
+    await gotoTeacherSchool(page);
+    await seedTeachingDay(page);
+    expect(await page.evaluate(() => (window as any).FluxTeacherClasses.mine()?.length)).toBe(2);
+
+    // Off the clock, a teacher is a person using a planner.
+    const mine = await page.evaluate(() => {
+      const w = window as any;
+      w.FluxRole.setMode ? w.FluxRole.setMode('personal') : (w.FluxRole.mode = 'personal');
+      return w.FluxTeacherClasses.mine();
+    });
+    expect(mine).toBeNull();
+  });
+
+  test('a student is untouched by any of this', async ({ page }) => {
+    await gotoScenario(page, 'student-semester');
+    const res = await page.evaluate(() => {
+      const w = window as any;
+      return { mine: w.FluxTeacherClasses.mine(), studentCount: (w.classes || []).length };
+    });
+    // mine() must refuse for anyone who is not staff, so resolveLive falls
+    // through to the student list exactly as it always did.
+    expect(res.mine).toBeNull();
+    expect(res.studentCount).toBeGreaterThan(0);
+  });
+
+  /*
+   * Deleting a class you JOINED must cancel the enrolment as well.
+   *
+   * syncEnrolledTeacherClassesToPlanner() re-adds a class on every boot for
+   * every teacher_students row still active. Deleting only the local entry
+   * left that row alone, so the class came back on the next refresh — with the
+   * same id each time, because the planner entry hashes the class code instead
+   * of reading the clock. That made it look like one stubborn row rather than
+   * a fresh one, which is exactly how it was reported.
+   *
+   * A hand-made class has no code and must not produce any network call, or
+   * every ordinary delete would start writing to a table it has no business
+   * touching.
+   */
+  test('deleting a joined class cancels the enrolment, so it cannot come back', async ({ page }) => {
+    await gotoScenario(page, 'teacher-workflow');
+    await page.waitForFunction(() => typeof (window as any).deleteClass === 'function'
+      && !!(window as any).currentUser, null, { timeout: 15_000 });
+
+    /* Leaving goes through flux_leave_teacher_class: RLS gives students
+       SELECT only on teacher_students, so the direct update this test used to
+       expect matched no rows for any real student and the class came back.
+       The direct update is kept as the fallback for a database that has not
+       got the function yet, and that path is checked too. */
+    const res = await page.evaluate(async () => {
+      const w = window as any;
+      const calls: Array<Record<string, unknown>> = [];
+      const realGetSB = w.getSB;
+      let rpcError: unknown = null;
+      /* A chainable stub, so what gets asserted is the real call shape —
+         .rpc(name, args) and .from().update().eq().eq() — rather than a
+         convenient simplification. */
+      w.getSB = () => ({
+        rpc(name: string, args: unknown) {
+          calls.push({ rpc: name, args });
+          return { then(res: (r: { error: unknown }) => void) { res({ error: rpcError }); } };
+        },
+        from(table: string) {
+          const call: Record<string, unknown> = { table, filters: {} as Record<string, unknown> };
+          const chain: Record<string, unknown> = {
+            update(patch: unknown) { call.patch = patch; calls.push(call); return chain; },
+            eq(col: string, val: unknown) { (call.filters as Record<string, unknown>)[col] = val; return chain; },
+            then(res: (r: { error: null }) => void) { res({ error: null }); return chain; },
+          };
+          return chain;
+        },
+      });
+
+      const run = async (cls: unknown[], id: number) => {
+        calls.length = 0;
+        w.classes = cls;
+        w.deleteClass(id);
+        await new Promise((r) => setTimeout(r, 150));
+        return { calls: calls.slice(), ids: w.classes.map((c: any) => c.id) };
+      };
+      const joined = { id: 999001, name: 'Joined Class', periodLabel: 'A1', teacherClassCode: 'ZZ999Z' };
+      const plain = { id: 999002, name: 'Hand-made Class', periodLabel: 'A2' };
+
+      const afterJoined = await run([joined, plain], 999001);
+      rpcError = { message: 'function flux_leave_teacher_class does not exist' };
+      const afterFallback = await run([{ ...joined }], 999001);
+      rpcError = null;
+      const afterPlain = await run([plain], 999002);
+
+      w.getSB = realGetSB;
+      return { afterJoined, afterFallback, afterPlain, userId: w.currentUser?.id };
+    });
+
+    // The joined class: gone locally AND unenrolled through the function.
+    expect(res.afterJoined.ids, 'the joined class was not removed').not.toContain(999001);
+    expect(res.afterJoined.calls, 'no enrolment cancel was sent').toHaveLength(1);
+    expect(res.afterJoined.calls[0]).toEqual({ rpc: 'flux_leave_teacher_class', args: { p_code: 'ZZ999Z' } });
+
+    // An older database without the function: the direct update, scoped to this student and class.
+    expect(res.afterFallback.calls).toHaveLength(2);
+    const call = res.afterFallback.calls[1] as unknown as
+      { table: string; patch: unknown; filters: Record<string, unknown> };
+    expect(call.table).toBe('teacher_students');
+    expect(call.patch).toEqual({ active: false });
+    expect(call.filters.class_code, 'the wrong class was unenrolled').toBe('ZZ999Z');
+    expect(call.filters.student_id, 'the update was not scoped to this student').toBe(res.userId);
+
+    // The hand-made class: removed, and nothing written anywhere.
+    expect(res.afterPlain.ids, 'the hand-made class was not removed').not.toContain(999002);
+    expect(res.afterPlain.calls,
+      'deleting a class with no code should not touch the database').toHaveLength(0);
+  });
+});
